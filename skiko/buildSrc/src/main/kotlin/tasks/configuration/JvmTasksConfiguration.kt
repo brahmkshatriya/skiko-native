@@ -37,6 +37,7 @@ import org.gradle.kotlin.dsl.register
 import projectDirs
 import registerOrGetSkiaDirProvider
 import registerSkikoTask
+import requireDumpbin
 import runPkgConfig
 import symbols.GenerateRequiredSymbolsTask
 import symbols.GenerateSymbolsListTask
@@ -169,7 +170,7 @@ private fun SkikoProjectContext.createGenerateRequiredSymbolsTask(
     this.symbolExtractorCommand.set(
         when (targetOs) {
             OS.Android -> project.androidLlvmNm().map { listOf(it) }
-            OS.Windows -> project.provider { listOf(windowsSdkPaths.dumpbin.absolutePath) }
+            OS.Windows -> project.provider { listOf(windowsSdkPaths.requireDumpbin().absolutePath) }
             else -> project.provider { listOf("nm") }
         }
     )
@@ -437,7 +438,7 @@ fun SkikoProjectContext.configureGenerateSymbolsList(
         this.symbolExtractorCommand.set(
             when (targetOs) {
                 OS.Android -> project.androidLlvmNm().map { listOf(it) }
-                OS.Windows -> project.provider { listOf(windowsSdkPaths.dumpbin.absolutePath) }
+                OS.Windows -> project.provider { listOf(windowsSdkPaths.requireDumpbin().absolutePath) }
                 else -> project.provider { listOf("nm") }
             }
         )

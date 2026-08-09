@@ -78,6 +78,10 @@ internal abstract class AbstractArgBuilder : ArgBuilder {
 
 internal abstract class BaseVisualStudioBuildToolsArgBuilder : AbstractArgBuilder() {
     override fun escapePathIfNeeded(file: File): String {
+        if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+            val path = super.escapePathIfNeeded(file)
+            return if (" " in path) "\"$path\"" else path
+        }
         val path = file.absolutePath
             .replace("/", "\\")
             .replace("\\", "\\\\")

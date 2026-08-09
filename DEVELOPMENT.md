@@ -23,6 +23,22 @@
        ```
     4. Skiko is built using Clang-cl. Clang-cl is a part of LLVM and can be downloaded from the [LLVM project's website](https://releases.llvm.org/). Please also make sure that Clang-cl.exe is available in %PATH%.
 
+  * `Linux` → Windows Kotlin/Native bridge (experimental)
+    1. Install `clang-cl`, `lld-link`, and `llvm-lib` and make sure they are available on `PATH`.
+    2. Create an MSVC-compatible SDK layout with [xwin](https://github.com/Jake-Shadle/xwin):
+       ```shell
+       xwin --accept-license --arch x86_64 splat --output "$PWD/.xwin"
+       ```
+       Review and accept Microsoft's license before downloading the SDK files.
+    3. Point Skiko at the resulting `splat` directory and enable the Windows native target:
+       ```shell
+       export SKIKO_WINDOWS_SDK_ROOT="$PWD/.xwin"
+       ./gradlew -p skiko mingwX64MainKlibrary \
+           -Pskiko.awt.enabled=false \
+           -Pskiko.native.windows.enabled=true
+       ```
+       The environment variable is an explicit opt-in for cross-compiling the MSVC C++ bridge. It is not used for Windows JVM bridge builds, and Windows is still required for authoritative runtime testing.
+
 * Install Emscripten
   * Skiko follows the Emscripten version used by the underlying Skia build. While other versions may work, we recommend using the same version that is currently used in the project to avoid compatibility issues. 
   * The current version used by Skiko is `4.0.7`

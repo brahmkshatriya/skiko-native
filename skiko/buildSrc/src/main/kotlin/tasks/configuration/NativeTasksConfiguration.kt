@@ -7,6 +7,7 @@ import OS
 import SkiaBuildType
 import SkikoModuleKind
 import SkikoProjectContext
+import StripCoffDirectivesTask
 import WriteCInteropDefFile
 import compilerForTarget
 import dsl.TargetEnv
@@ -19,9 +20,15 @@ import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
 import org.gradle.api.attributes.Attribute
 import org.gradle.api.attributes.Usage
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByName
+import org.gradle.kotlin.dsl.register
+import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -220,12 +227,26 @@ fun SkikoProjectContext.compileNativeBridgesTask(
             OS.Windows -> {
                 compiler.set(windowsSdkPaths.compiler.absolutePath)
                 includeHeadersNonRecursive(windowsSdkPaths.includeDirs)
+                val crossTargetFlags = if (windowsSdkPaths.isCrossCompiling) {
+                    val targetTriple = when (arch) {
+                        Arch.X64 -> "x86_64-pc-windows-msvc"
+                        Arch.Arm64 -> "aarch64-pc-windows-msvc"
+                        Arch.Wasm -> error("Unexpected Windows architecture: $arch")
+                    }
+                    arrayOf(
+                        "/clang:--target=$targetTriple",
+                        "/clang:-Wno-unused-command-line-argument",
+                    )
+                } else {
+                    emptyArray()
+                }
                 flags.set(listOf(
                     "/nologo",
                     *buildType.winCompilerFlags,
                     "/utf-8",
                     "/GR-",
                     "/FS",
+                    *crossTargetFlags,
                     *skiaPreprocessorFlags(OS.Windows, buildType),
                 ))
             }
@@ -233,7 +254,8 @@ fun SkikoProjectContext.compileNativeBridgesTask(
         }
 
         val srcDirs = projectDirs("src/commonMain/cpp/common", "src/nativeNativeJs/cpp", "src/nativeJsMain/cpp") +
-                if (skiko.includeTestHelpers) projectDirs("src/nativeJsTest/cpp") else emptyList()
+                (if (os == OS.Windows) projectDirs("src/windowsMain/cpp") else emptyList()) +
+                (if (skiko.includeTestHelpers) projectDirs("src/nativeJsTest/cpp") else emptyList())
         sourceRoots.set(srcDirs)
 
         includeHeadersNonRecursive(projectDir.resolve("src/nativeJsMain/cpp"))
@@ -309,17 +331,84 @@ fun SkikoProjectContext.configureNativeTarget(
     // unsupported shapes fall back to a "_skiko" suffix.
     val requiresSymbolPatching = os == OS.IOS || os == OS.TVOS
     val patchedLibsDir = layout.buildDirectory.dir("nativeBridges/patched/$targetString").get().asFile
+    val strippedCoffLibsDir =
+        layout.buildDirectory.dir("nativeBridges/strippedCoff/$targetString").get().asFile
 
     val skiaBinDir = "$skiaDir/out/${buildType.id}-$targetString"
+    if (os == OS.Windows && kind == SkikoModuleKind.CORE) {
+        val icuData = file("$skiaBinDir/icudtl.dat")
+        extensions.configure<PublishingExtension> {
+            publications.withType<MavenPublication>().configureEach {
+                if (name == target.name) {
+                    artifact(icuData) {
+                        classifier = "icudtl"
+                        extension = "dat"
+                        builtBy(unzipper)
+                    }
+                }
+            }
+        }
+    }
     val resolvedBinaryInputs = resolveBinaryInputs(os, arch, TargetEnv.NATIVE, skiaBinDir)
     val nativeArchives = resolvedBinaryInputs.staticArchivePaths.distinct()
-    val allLibraries = if (requiresSymbolPatching) {
-        nativeArchives.map { lib ->
-            "${patchedLibsDir.absolutePath}/${File(lib).name}"
-        } + "${patchedLibsDir.absolutePath}/$nativeBridgesLibPrefix-$targetString.a"
+    val windowsRuntimeAliasesTask: TaskProvider<Sync>?
+    val windowsRuntimeArchives: List<String>
+    val windowsStaticMsvcRuntimes: List<String>
+    if (os == OS.Windows) {
+        val msvcRuntimeLibraryDir =
+            windowsSdkPaths.libDirs.firstOrNull { it.resolve("libcmt.lib").isFile }
+                ?: error("MSVC static runtime libraries were not found in ${windowsSdkPaths.libDirs}")
+        val ucrtLibraryDir =
+            windowsSdkPaths.libDirs.firstOrNull { it.resolve("ucrt.lib").isFile }
+                ?: error("Windows UCRT import libraries were not found in ${windowsSdkPaths.libDirs}")
+        val windowsSystemLibraryDir =
+            windowsSdkPaths.libDirs.firstOrNull { it.resolve("d3d12.lib").isFile }
+                ?: error("Windows SDK import libraries were not found in ${windowsSdkPaths.libDirs}")
+        val runtimeAliases =
+            mapOf(
+                msvcRuntimeLibraryDir.resolve("oldnames.lib") to "liboldnames.a",
+                msvcRuntimeLibraryDir.resolve("msvcrt.lib") to "libmsvcrtcompat.a",
+                ucrtLibraryDir.resolve("ucrt.lib") to "libucrt.a",
+                windowsSystemLibraryDir.resolve("d3d12.lib") to "libd3d12.a",
+            )
+        val aliasesDir =
+            layout.buildDirectory.dir("nativeBridges/msvcRuntimeAliases/$targetString").get().asFile
+        windowsRuntimeAliasesTask =
+            tasks.register<Sync>("prepareMsvcRuntimeAliases${joinToTitleCamelCase(targetString)}") {
+                runtimeAliases.forEach { (source, aliasName) ->
+                    from(source) {
+                        rename { aliasName }
+                    }
+                }
+                into(aliasesDir)
+        }
+        windowsRuntimeArchives = runtimeAliases.values.map { aliasesDir.resolve(it).absolutePath }
+        windowsStaticMsvcRuntimes =
+            listOf("libcpmt.lib", "libvcruntime.lib").map {
+                msvcRuntimeLibraryDir.resolve(it).absolutePath
+            }
     } else {
-        nativeArchives + bridgesLibraryPath
+        windowsRuntimeAliasesTask = null
+        windowsRuntimeArchives = emptyList()
+        windowsStaticMsvcRuntimes = emptyList()
     }
+    val platformLibraries =
+        when {
+            requiresSymbolPatching ->
+                nativeArchives.map { lib ->
+                    "${patchedLibsDir.absolutePath}/${File(lib).name}"
+                } + "${patchedLibsDir.absolutePath}/$nativeBridgesLibPrefix-$targetString.a"
+            os == OS.Windows ->
+                nativeArchives.map { lib ->
+                    strippedCoffLibsDir.resolve(File(lib).name).absolutePath
+                } +
+                    strippedCoffLibsDir.resolve(File(bridgesLibraryPath).name).absolutePath +
+                    windowsStaticMsvcRuntimes.map { runtime ->
+                        strippedCoffLibsDir.resolve(File(runtime).name).absolutePath
+                    }
+            else -> nativeArchives + bridgesLibraryPath
+        }
+    val allLibraries = platformLibraries + windowsRuntimeArchives
 
     val hiddenSymbolsFile = layout.buildDirectory.file(
         "nativeHiddenSymbols/$targetString/${if (os.isLinux) "symbols.map" else "symbols.txt"}"
@@ -390,11 +479,27 @@ fun SkikoProjectContext.configureNativeTarget(
             mutableListOfLinkerOptions(options)
         }
         OS.Windows -> {
-            val options = mutableListOf<String>()
-            options.addAll(windowsSdkPaths.libDirs.map { "-L${it.absolutePath}" })
+            val options = mutableListOf(
+                // The published Skia archives carry /MT directives, while Kotlin/Native uses the
+                // MinGW CRT. Pulling both static CRTs into one process corrupts heap/TLS startup.
+                // Suppress Skia's default libraries and satisfy its C++ and compiler ABI through
+                // the filtered static MSVC++/VCRuntime archives embedded above. The C runtime
+                // remains the official dynamic Universal CRT so it shares one heap with MinGW.
+                // msvcrt.lib contributes a small /MD startup shim whose PE TLS and atexit names
+                // overlap MinGW; keep Kotlin/Native's earlier definitions for those ABI-equivalent
+                // entry points.
+                "-Wl,--allow-multiple-definition",
+                "-Wl,/nodefaultlib:libcmt",
+                "-Wl,/nodefaultlib:oldnames",
+                "-Wl,/nodefaultlib:libcpmt",
+                "-Wl,/nodefaultlib:libucrt",
+                "-Wl,/nodefaultlib:libvcruntime",
+                "-Wl,/nodefaultlib:vcruntime",
+            )
             options.addAll(resolvedBinaryInputs.directStaticArchivePaths)
             options.addAll(resolvedBinaryInputs.dynamicLibNames.map { "-l$it" })
             options.addAll(resolvedBinaryInputs.linkFlags)
+            configureCinterop(cinteropName, os, arch, target, targetString, options)
             mutableListOfLinkerOptions(options)
         }
         else -> mutableListOf()
@@ -443,7 +548,7 @@ fun SkikoProjectContext.configureNativeTarget(
                 argumentProviders.add { listOf("-crs", staticLib) }
             }
             OS.Windows -> {
-                executable = windowsSdkPaths.linker.parentFile.resolve("lib.exe").absolutePath
+                executable = windowsSdkPaths.librarian.absolutePath
                 argumentProviders.add { listOf("/NOLOGO", "/OUT:$staticLib") }
             }
             OS.MacOS, OS.IOS, OS.TVOS -> {
@@ -456,6 +561,24 @@ fun SkikoProjectContext.configureNativeTarget(
         file(outDir).mkdirs()
         outputs.dir(outDir)
     }
+
+    val stripCoffDirectivesTask =
+        if (os == OS.Windows) {
+            project.registerSkikoTask<StripCoffDirectivesTask>(
+                "stripCoffDirectives",
+                os,
+                arch,
+            ) {
+                dependsOn(unzipper)
+                dependsOn(linkTask)
+                inputLibraries.set(
+                    (nativeArchives + bridgesLibraryPath + windowsStaticMsvcRuntimes).map(::File)
+                )
+                outputDir.set(strippedCoffLibsDir)
+            }
+        } else {
+            null
+        }
 
     // For iOS/tvOS: patch all Skia + skiko-bridge symbols after linking.
     val compilationDependency = if (requiresSymbolPatching) {
@@ -482,9 +605,7 @@ fun SkikoProjectContext.configureNativeTarget(
                 configureNativeSymbolSourcesElements(os, arch, isUikitSim, nativeArchives + bridgesLibraryPath, patchTask)
             }
         }
-    } else {
-        linkTask
-    }
+    } else stripCoffDirectivesTask ?: linkTask
 
     hideSkiaSymbols?.configure {
         dependsOn(unzipper)
@@ -493,6 +614,7 @@ fun SkikoProjectContext.configureNativeTarget(
 
     target.compilations.all {
         compileTaskProvider.configure {
+            windowsRuntimeAliasesTask?.let { dependsOn(it) }
             if (hideSkiaSymbols != null) {
                 dependsOn(hideSkiaSymbols)
             } else {

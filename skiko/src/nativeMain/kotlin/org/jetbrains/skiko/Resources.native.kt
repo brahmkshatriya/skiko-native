@@ -1,9 +1,14 @@
 package org.jetbrains.skiko
 
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import platform.posix.*
+
+internal expect fun seekResourceFile(file: COpaquePointer, offset: Long, origin: Int): Int
+
+internal expect fun tellResourceFile(file: COpaquePointer): Long
 
 actual suspend fun loadBytesFromPath(path: String): ByteArray {
     val file = fopen(path, "rb") ?: run {
@@ -12,9 +17,9 @@ actual suspend fun loadBytesFromPath(path: String): ByteArray {
     }
 
     val size = file.let {
-        fseek(it, 0, SEEK_END)
-        val size = ftell(it).toLong()
-        fseek(it, 0, SEEK_SET)
+        seekResourceFile(it, 0, SEEK_END)
+        val size = tellResourceFile(it)
+        seekResourceFile(it, 0, SEEK_SET)
         size
     }
 

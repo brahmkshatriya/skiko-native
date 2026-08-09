@@ -107,12 +107,8 @@ val coreDependencies: SkikoDependencyScope.() -> Unit = {
             }
         }
         native {
-            staticSkiaLibs(
-                "piex",
-                "dng_sdk",
-            )
-
             linux {
+                staticSkiaLibs("piex", "dng_sdk")
                 // Hack to fix problem with linker not always finding certain declarations.
                 directStaticSkiaLibs(
                     "skshaper",
@@ -137,16 +133,17 @@ val coreDependencies: SkikoDependencyScope.() -> Unit = {
                     "gdi32",
                     "dwmapi",
                     "ole32",
-                    "propsys",
-                    "shcore",
                     "shlwapi",
                     "user32",
                     "winmm",
                     "dxgi",
+                    "d3dcompiler",
+                    "opengl32",
                 )
             }
 
             macos {
+                staticSkiaLibs("piex", "dng_sdk")
                 frameworks(
                     "Metal",
                     "CoreGraphics",
@@ -156,6 +153,7 @@ val coreDependencies: SkikoDependencyScope.() -> Unit = {
             }
 
             ios {
+                staticSkiaLibs("piex", "dng_sdk")
                 frameworks(
                     "Metal",
                     "CoreGraphics",
@@ -165,6 +163,7 @@ val coreDependencies: SkikoDependencyScope.() -> Unit = {
             }
 
             tvos {
+                staticSkiaLibs("piex", "dng_sdk")
                 frameworks(
                     "Metal",
                     "CoreGraphics",

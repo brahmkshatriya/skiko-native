@@ -34,7 +34,7 @@ enum class OS(
 val OS.isCompatibleWithHost: Boolean
     get() = when (this) {
         OS.Linux -> hostOs == OS.Linux
-        OS.Windows -> hostOs == OS.Windows
+        OS.Windows -> hostOs == OS.Windows || isLinuxToWindowsMsvcCrossCompilationEnabled
         OS.MacOS, OS.IOS, OS.TVOS -> hostOs == OS.MacOS
         OS.Wasm -> true
         OS.Android -> true

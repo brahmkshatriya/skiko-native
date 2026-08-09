@@ -13,19 +13,35 @@ Supported platforms:
    * Kotlin/JS + WebAssembly in browsers
    * Kotlin/Native on iOS(arm64 and x64)
    * Kotlin/Native on macOS (arm64 and x64)
-   * Kotlin/Native on Windows (x86_64; Win32 software presentation)
+   * Kotlin/Native on Windows (x86_64; Direct3D 12 and WGL/OpenGL with Win32 software fallback)
 
 ## Windows Kotlin/Native smoke test on Linux
 
-On an x86_64 Linux host with Wine installed, compile the `mingwX64` KLIB and run a pure-Kotlin Skiko smoke executable with:
+On an x86_64 Linux host with Wine installed, compile the `mingwX64` KLIB and run the Windows native smoke executables with:
 
 ```shell
 ./skiko/tools/run-windows-native-smoke-on-wine.sh
 ```
 
-This verifies Windows Kotlin/Native compilation, target detection, dependency resolution, system-theme lookup, native layer initialization, Win32 window creation, and APIs that do not call the C++ bridge. `SkiaLayer` accepts a `WindowsNativeWindow` or an HWND encoded as a non-zero `Long`; its current native backend is DPI-aware BGRA software presentation through Win32 GDI, with owned-window paint/resize dispatch, DWM frame throttling, message pumping, and borderless fullscreen transitions. OpenGL and ANGLE DLL discovery is implemented, while Direct3D and ANGLE rendering still require porting their JNI C++ bridge code to the Kotlin/Native C ABI.
+Without `SKIKO_WINDOWS_SDK_ROOT`, this verifies Windows Kotlin/Native compilation, target detection, dependency resolution, system-theme lookup, renderer configuration, native layer initialization, and Win32 window creation without the C++ bridge. With the xwin SDK configured as described below, it also builds and links the real MSVC-compatible C++ bridge, renders a WGL/Ganesh frame, and snapshots the result under Wine. `SkiaLayer` accepts a `WindowsNativeWindow` or an HWND encoded as a non-zero `Long`; its native backend defaults to Direct3D 12/DXGI, supports double and triple buffering plus DirectComposition transparency, and falls back through WGL/OpenGL to cached BGRA software rendering through Win32 GDI. It includes adapter selection and diagnostics, owned-window paint/resize dispatch, coalesced render messages, DWM frame throttling, context/device recovery, message pumping, and borderless fullscreen transitions. ANGLE rendering remains loader-only and is not yet a native renderer backend.
 
-The published Windows Skia archives use the MSVC C++ ABI, so building and testing the native Skia bridge still requires an MSVC-compatible Windows build environment.
+The published Windows Skia archives use the MSVC C++ ABI. The bridge can be built on
+Windows with Visual Studio Build Tools, or cross-compiled experimentally from Linux
+with an [xwin](https://github.com/Jake-Shadle/xwin) SDK layout and LLVM's MSVC-compatible
+tools:
+
+```shell
+xwin --accept-license --arch x86_64 splat --output "$PWD/.xwin"
+export SKIKO_WINDOWS_SDK_ROOT="$PWD/.xwin"
+./gradlew -p skiko mingwX64MainKlibrary \
+    -Pskiko.awt.enabled=false \
+    -Pskiko.native.windows.enabled=true
+```
+
+`clang-cl`, `lld-link`, and `llvm-lib` must be on `PATH`. Setting
+`SKIKO_WINDOWS_SDK_ROOT` is the explicit opt-in that enables the Windows native C++
+bridge on a Linux host; leave it unset for the pure-Kotlin Windows KLIB build. A real
+Windows machine remains the authoritative environment for runtime testing.
 
 ## API documentation
 
