@@ -367,7 +367,6 @@ fun SkikoProjectContext.configureNativeTarget(
         val runtimeAliases =
             mapOf(
                 msvcRuntimeLibraryDir.resolve("oldnames.lib") to "liboldnames.a",
-                msvcRuntimeLibraryDir.resolve("msvcrt.lib") to "libmsvcrtcompat.a",
                 ucrtLibraryDir.resolve("ucrt.lib") to "libucrt.a",
                 windowsSystemLibraryDir.resolve("d3d12.lib") to "libd3d12.a",
             )
@@ -384,7 +383,7 @@ fun SkikoProjectContext.configureNativeTarget(
         }
         windowsRuntimeArchives = runtimeAliases.values.map { aliasesDir.resolve(it).absolutePath }
         windowsStaticMsvcRuntimes =
-            listOf("libcpmt.lib", "libvcruntime.lib").map {
+            listOf("libcmt.lib", "libcpmt.lib", "libvcruntime.lib").map {
                 msvcRuntimeLibraryDir.resolve(it).absolutePath
             }
     } else {
@@ -481,14 +480,10 @@ fun SkikoProjectContext.configureNativeTarget(
         OS.Windows -> {
             val options = mutableListOf(
                 // The published Skia archives carry /MT directives, while Kotlin/Native uses the
-                // MinGW CRT. Pulling both static CRTs into one process corrupts heap/TLS startup.
-                // Suppress Skia's default libraries and satisfy its C++ and compiler ABI through
-                // the filtered static MSVC++/VCRuntime archives embedded above. The C runtime
-                // remains the official dynamic Universal CRT so it shares one heap with MinGW.
-                // msvcrt.lib contributes a small /MD startup shim whose PE TLS and atexit names
-                // overlap MinGW; keep Kotlin/Native's earlier definitions for those ABI-equivalent
-                // entry points.
+                // MinGW CRT. Suppress their default-library directives and explicitly provide the
+                // matching filtered MSVC runtime archives embedded above.
                 "-Wl,--allow-multiple-definition",
+                "-Wl,--wrap=atexit",
                 "-Wl,/nodefaultlib:libcmt",
                 "-Wl,/nodefaultlib:oldnames",
                 "-Wl,/nodefaultlib:libcpmt",
