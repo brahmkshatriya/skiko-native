@@ -175,6 +175,12 @@ Build or publish with the same Windows tasks:
 Without it, the build can compile the pure Kotlin Windows API surface but cannot include the Skia
 C++ bridge.
 
+The Windows native build handles Skia's MSVC `/MT` archives and Kotlin/Native's MinGW CRT
+internally. Gradle embeds the filtered static MSVC runtime archives needed by the Skia bridge and
+wraps Skia's process-exit `atexit` registration, avoiding the incompatible mixed-CRT startup/exit
+path. Consumers should not add replacement `msvcrt` compatibility archives or duplicate MSVC CRT
+linker flags manually.
+
 ## Use in a Kotlin Multiplatform project
 
 The native development version in this fork is `0.0.1-linux-native-SNAPSHOT`. Publish the required
@@ -252,8 +258,9 @@ org.jetbrains.skiko:skiko-mingwx64:0.0.1-linux-native-SNAPSHOT:icudtl@dat
 ```
 
 Application packagers must also include any DLLs directly imported by their final executable or
-other native libraries. The Compose Native Windows package task stages Skiko's ICU data, SDL3, and
-the required MinGW runtime DLLs automatically.
+other native libraries. Skiko's MSVC runtime pieces used by the Skia bridge are linked as filtered
+static archives by the build; they are not an extra packaging step. The Compose Native Windows
+package task stages Skiko's ICU data, SDL3, and the required MinGW runtime DLLs automatically.
 
 ## Runtime configuration
 
