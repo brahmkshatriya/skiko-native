@@ -51,6 +51,9 @@ private val nativeSymbolSourcesUikitSimAttribute =
 
 private const val NATIVE_SYMBOL_SOURCES_USAGE = "skiko-native-symbol-sources"
 
+private val arm64ToolchainRoot: String
+    get() = System.getenv("SKIKO_ARM64_TOOLCHAIN") ?: "/opt/arm-gnu-toolchain"
+
 fun String.withSuffix(isUikitSim: Boolean = false) =
     this + if (isUikitSim) "Sim" else ""
 
@@ -220,7 +223,11 @@ fun SkikoProjectContext.compileNativeBridgesTask(
                 )
                 // Add sysroot for ARM64 cross-compilation
                 if (arch == Arch.Arm64 && hostArch != Arch.Arm64) {
-                    linuxFlags.add(0, "--sysroot=/opt/arm-gnu-toolchain/aarch64-none-linux-gnu/libc")
+                    linuxFlags.add(0, "--sysroot=$arm64ToolchainRoot/aarch64-none-linux-gnu/libc")
+                    // Fontconfig, FreeType, GLX, and X11 development headers are architecture-neutral.
+                    // Search the host's header tree only after the ARM64 sysroot so libc headers still
+                    // come from the cross toolchain.
+                    linuxFlags.addAll(listOf("-idirafter", "/usr/include", "-idirafter", "/usr/include/freetype2"))
                 }
                 flags.set(linuxFlags)
             }
@@ -471,8 +478,8 @@ fun SkikoProjectContext.configureNativeTarget(
             // When cross-compiling for ARM64 from x64, use the ARM toolchain sysroot
             if (arch == Arch.Arm64 && hostArch != Arch.Arm64) {
                 // ARM GNU toolchain sysroot paths
-                options.add(0, "-L/opt/arm-gnu-toolchain/aarch64-none-linux-gnu/libc/lib64")
-                options.add(1, "-L/opt/arm-gnu-toolchain/aarch64-none-linux-gnu/libc/usr/lib64")
+                options.add(0, "-L$arm64ToolchainRoot/aarch64-none-linux-gnu/libc/lib64")
+                options.add(1, "-L$arm64ToolchainRoot/aarch64-none-linux-gnu/libc/usr/lib64")
             }
             options.add("--version-script=${hiddenSymbolsFile.get().asFile.absolutePath}")
             mutableListOfLinkerOptions(options)
