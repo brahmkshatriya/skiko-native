@@ -28,6 +28,7 @@ val targetOs = hostOs
 val targetArch = skiko.targetArch
 val coreProject = project(":")
 val graphiteArtifacts = SkikoArtifacts(
+    groupId = skiko.deployGroup,
     artifactIdPrefix = "skiko-graphite",
     displayName = "Skiko Graphite",
     pomDescription = "Kotlin Skia Graphite bindings",

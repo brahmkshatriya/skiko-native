@@ -1,6 +1,9 @@
 @file:OptIn(ExperimentalKotlinGradlePluginApi::class, ExperimentalWasmDsl::class)
 
 import com.android.build.api.dsl.KotlinMultiplatformAndroidLibraryTarget
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import org.gradle.api.publish.tasks.GenerateModuleMetadata
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.compose.internal.publishing.MavenCentralProperties
@@ -35,7 +38,7 @@ val skiko = SkikoProperties(rootProject)
 val buildType = skiko.buildType
 val targetOs = hostOs
 val targetArch = skiko.targetArch
-val skikoArtifacts = SkikoArtifacts()
+val skikoArtifacts = SkikoArtifacts(groupId = skiko.deployGroup)
 
 val coreDependencies: SkikoDependencyScope.() -> Unit = {
     targets {
@@ -212,7 +215,7 @@ val skikoProjectContext = SkikoProjectContext(
 )
 
 allprojects {
-    group = SkikoArtifacts.DEFAULT_GROUP_ID
+    group = skikoArtifacts.groupId
     version = skiko.deployVersion
 }
 
@@ -320,8 +323,10 @@ kotlin {
         skikoProjectContext.configureNativeTarget(OS.MacOS, Arch.X64, macosX64())
         skikoProjectContext.configureNativeTarget(OS.MacOS, Arch.Arm64, macosArm64())
     }
-    if (supportNativeLinux) {
+    if (supportNativeLinuxX64) {
         skikoProjectContext.configureNativeTarget(OS.Linux, Arch.X64, linuxX64())
+    }
+    if (supportNativeLinuxArm64) {
         skikoProjectContext.configureNativeTarget(OS.Linux, Arch.Arm64, linuxArm64())
     }
     if (supportNativeWindows) {
@@ -517,11 +522,48 @@ if (supportWeb) {
 
 skikoProjectContext.declarePublications()
 
+// A JVM target is enabled when producing the native-only KMP root so common metadata is
+// compiled with the metadata/JVM compiler. Do not advertise that unpublished forked AWT
+// target: non-native consumers continue to use the upstream Skiko coordinates.
+if (providers.gradleProperty("skiko.native.root.only").map(String::toBoolean).getOrElse(false)) {
+    val publishedNativeTargets = setOf("linux_x64", "linux_arm64", "mingw_x64")
+    tasks.named<GenerateModuleMetadata>("generateMetadataFileForKotlinMultiplatformPublication") {
+        doLast {
+            val metadataFile = outputFile.get().asFile
+            @Suppress("UNCHECKED_CAST")
+            val metadata = JsonSlurper().parseText(
+                metadataFile.readText(Charsets.UTF_8)
+            ) as MutableMap<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val variants = metadata["variants"] as List<Map<String, Any?>>
+            metadata["variants"] = variants.filter { variant ->
+                @Suppress("UNCHECKED_CAST")
+                val attributes = variant["attributes"] as? Map<String, Any?>
+                val nativeTarget = attributes?.get("org.jetbrains.kotlin.native.target") as? String
+                nativeTarget in publishedNativeTargets || variant["name"] in setOf(
+                    "metadataApiElements",
+                    "metadataSourcesElements",
+                )
+            }
+            metadataFile.writeText(
+                JsonOutput.prettyPrint(JsonOutput.toJson(metadata)) + "\n",
+                Charsets.UTF_8,
+            )
+        }
+    }
+}
+
 val mavenCentral = MavenCentralProperties(project)
-if (skiko.isTeamcityCIBuild || mavenCentral.signArtifacts) {
+val hasLegacySigningKey = providers.gradleProperty("signing.secretKeyRingFile").isPresent
+if (skiko.isTeamcityCIBuild || mavenCentral.signArtifacts || hasLegacySigningKey) {
     signing {
         sign(publishing.publications)
-        useInMemoryPgpKeys(mavenCentral.signArtifactsKey.get(), mavenCentral.signArtifactsPassword.get())
+        if (mavenCentral.signArtifacts) {
+            useInMemoryPgpKeys(
+                mavenCentral.signArtifactsKey.get(),
+                mavenCentral.signArtifactsPassword.get(),
+            )
+        }
     }
     configureSignAndPublishDependencies()
 }

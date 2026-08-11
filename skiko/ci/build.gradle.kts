@@ -4,13 +4,15 @@ import org.jetbrains.compose.internal.publishing.*
 val skiko = SkikoProperties(project)
 val mavenCentral = MavenCentralProperties(project)
 val GITHUB_REPO = "JetBrains/skiko"
-val skikoArtifacts = SkikoArtifacts()
+val skikoArtifacts = SkikoArtifacts(groupId = skiko.deployGroup)
 val skikoSkottieArtifacts = SkikoArtifacts(
+    groupId = skiko.deployGroup,
     artifactIdPrefix = "skiko-skottie",
     displayName = "Skiko Skottie",
     pomDescription = "Kotlin Skia Skottie bindings",
 )
 val skikoGraphiteArtifacts = SkikoArtifacts(
+    groupId = skiko.deployGroup,
     artifactIdPrefix = "skiko-graphite",
     displayName = "Skiko Graphite",
     pomDescription = "Kotlin Skia Graphite bindings",
@@ -134,12 +136,143 @@ val uploadSkikoArtifactsToMavenCentral by tasks.registering(UploadToSonatypeTask
     publishAfterUploading.set(mavenCentral.publishAfterUploading)
 }
 
+/** Publishes only the KMP root and the Linux x64 native KLIB built by this checkout. */
+val uploadNativeSkikoArtifactsToMavenCentral by tasks.registering(UploadToSonatypeTask::class) {
+    dependsOn(
+        ":publishKotlinMultiplatformPublicationToBuildRepoRepository",
+        ":publishLinuxX64PublicationToBuildRepoRepository",
+    )
+
+    deployName.set("Skiko Native ${skiko.deployVersion}")
+    modulesToUpload.set(
+        provider {
+            listOf(skikoArtifacts.commonArtifactId, skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.X64))
+                .map { artifactId ->
+                    ModuleToUpload(
+                        groupId = skiko.deployGroup,
+                        artifactId = artifactId,
+                        version = skiko.deployVersion,
+                        localDir =
+                            rootProject.layout.buildDirectory
+                                .dir("repo/${skiko.deployGroup.replace('.', '/')}/$artifactId/${skiko.deployVersion}")
+                                .get()
+                                .asFile,
+                    )
+                }
+        }
+    )
+
+    user.set(mavenCentral.user)
+    password.set(mavenCentral.password)
+    publishAfterUploading.set(true)
+}
+
+/** Publishes only the Windows x64 native KLIB built by this checkout. */
+val uploadWindowsNativeSkikoArtifactToMavenCentral by tasks.registering(UploadToSonatypeTask::class) {
+    dependsOn(":publishMingwX64PublicationToBuildRepoRepository")
+
+    deployName.set("Skiko Windows Native ${skiko.deployVersion}")
+    modulesToUpload.set(
+        provider {
+            val artifactId = skikoArtifacts.nativeArtifactIdFor(OS.Windows, Arch.X64)
+            listOf(
+                ModuleToUpload(
+                    groupId = skiko.deployGroup,
+                    artifactId = artifactId,
+                    version = skiko.deployVersion,
+                    localDir =
+                        rootProject.layout.buildDirectory
+                            .dir("repo/${skiko.deployGroup.replace('.', '/')}/$artifactId/${skiko.deployVersion}")
+                            .get()
+                            .asFile,
+                )
+            )
+        }
+    )
+
+    user.set(mavenCentral.user)
+    password.set(mavenCentral.password)
+    publishAfterUploading.set(true)
+}
+
+/** Uploads the Linux arm64 native KLIB previously built by the cross-compilation container. */
+val uploadLinuxArm64NativeSkikoArtifactToMavenCentral by tasks.registering(UploadToSonatypeTask::class) {
+    deployName.set("Skiko Linux Arm64 Native ${skiko.deployVersion}")
+    modulesToUpload.set(
+        provider {
+            val artifactId = skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.Arm64)
+            listOf(
+                ModuleToUpload(
+                    groupId = skiko.deployGroup,
+                    artifactId = artifactId,
+                    version = skiko.deployVersion,
+                    localDir =
+                        rootProject.layout.buildDirectory
+                            .dir("repo/${skiko.deployGroup.replace('.', '/')}/$artifactId/${skiko.deployVersion}")
+                            .get()
+                            .asFile,
+                )
+            )
+        }
+    )
+
+    user.set(mavenCentral.user)
+    password.set(mavenCentral.password)
+    publishAfterUploading.set(true)
+
+    doFirst {
+        check(skiko.isRelease) {
+            "Linux arm64 artifacts can only be uploaded with -Pdeploy.release=true"
+        }
+    }
+}
+
+/**
+ * Uploads the native-only KMP root and repository assembled from the Linux and Windows release jobs.
+ * This task intentionally has no publication-task dependencies because no single host builds all
+ * three native artifacts.
+ */
+val uploadDesktopNativeSkikoArtifactsToMavenCentral by tasks.registering(UploadToSonatypeTask::class) {
+    deployName.set("Skiko Desktop Native ${skiko.deployVersion}")
+    modulesToUpload.set(
+        provider {
+            listOf(
+                skikoArtifacts.commonArtifactId,
+                skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.X64),
+                skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.Arm64),
+                skikoArtifacts.nativeArtifactIdFor(OS.Windows, Arch.X64),
+            ).map { artifactId ->
+                ModuleToUpload(
+                    groupId = skiko.deployGroup,
+                    artifactId = artifactId,
+                    version = skiko.deployVersion,
+                    localDir =
+                        rootProject.layout.buildDirectory
+                            .dir("repo/${skiko.deployGroup.replace('.', '/')}/$artifactId/${skiko.deployVersion}")
+                            .get()
+                            .asFile,
+                )
+            }
+        }
+    )
+
+    user.set(mavenCentral.user)
+    password.set(mavenCentral.password)
+    publishAfterUploading.set(true)
+
+    doFirst {
+        check(skiko.isRelease) {
+            "Desktop native artifacts can only be uploaded with -Pdeploy.release=true"
+        }
+    }
+}
+
 fun Project.skikoMavenModules(version: String): Provider<List<ModuleToUpload>> =
     provider {
         val artifactsDir = layout.buildDirectory.dir("skiko-artifacts").get().asFile
 
         skikoArtifactIds.map { artifactId ->
-            val skikoGroupId = SkikoArtifacts.DEFAULT_GROUP_ID
+            val skikoGroupId = skiko.deployGroup
             ModuleToUpload(
                 groupId = skikoGroupId,
                 artifactId = artifactId,
@@ -153,4 +286,3 @@ fun connectToGitHub() =
     GitHubBuilder()
         .withOAuthToken(System.getenv("SKIKO_GH_RELEASE_TOKEN"))
         .build()
-

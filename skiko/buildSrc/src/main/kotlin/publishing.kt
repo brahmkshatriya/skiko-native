@@ -108,8 +108,9 @@ private val SkikoPublishingContext.emptySourcesJar
         archiveClassifier.set("sources")
     }
 
-private val SkikoPublishingContext.emptyJavadocJar
-    get() = project.tasks.registerOrGetTask<Jar>("emptyJavadocJar") {
+private fun SkikoPublishingContext.emptyJavadocJar(publicationName: String) =
+    project.tasks.registerOrGetTask<Jar>("empty${toTitleCase(publicationName)}JavadocJar") {
+        archiveBaseName.set("${skikoArtifacts.artifactIdPrefix}-$publicationName")
         archiveClassifier.set("javadoc")
     }
 
@@ -160,10 +161,10 @@ private fun SkikoPublishingContext.configurePublicationDefaults() {
     publishing {
         publications.configureEach {
             this as MavenPublication
-            groupId = SkikoArtifacts.DEFAULT_GROUP_ID
+            groupId = skikoArtifacts.groupId
 
             // Necessary for publishing to Maven Central
-            artifact(emptyJavadocJar)
+            artifact(emptyJavadocJar(name))
 
             pom {
                 description.set(skikoArtifacts.pomDescription)
@@ -187,7 +188,7 @@ private fun SkikoPublishingContext.configureAllJvmRuntimeJarPublications() = pub
             pom.withXml {
                 asNode().appendNode("dependencies")
                     .appendNode("dependency").apply {
-                        appendNode("groupId", SkikoArtifacts.DEFAULT_GROUP_ID)
+                        appendNode("groupId", skikoArtifacts.groupId)
                         appendNode("artifactId", skikoArtifacts.jvmArtifactId)
                         appendNode("version", "[${skiko.deployVersion}]")
                         appendNode("scope", "compile")
@@ -337,7 +338,7 @@ private fun SkikoPublishingContext.configureAwtRuntimeJarPublication() {
              */
             dependencies.add(
                 project.dependencies.create(
-                    SkikoArtifacts.DEFAULT_GROUP_ID,
+                    skikoArtifacts.groupId,
                     skikoArtifacts.jvmRuntimeArtifactIdFor(os, arch),
                     skiko.deployVersion
                 )
@@ -358,7 +359,7 @@ private fun SkikoPublishingContext.configureAwtRuntimeJarPublication() {
         create("awtRuntimeElements", MavenPublication::class.java) {
             from(component)
             pomNameForPublication[name] = "${skikoArtifacts.displayName} JVM Runtime"
-            groupId = SkikoArtifacts.DEFAULT_GROUP_ID
+            groupId = skikoArtifacts.groupId
             artifactId = skikoArtifacts.jvmRuntimeArtifactId
             version = skiko.deployVersion
 
@@ -397,7 +398,7 @@ private fun SkikoPublishingContext.configureAwtPublicationConstraints() {
             // Add constraint for the uber runtime artifact
             config.dependencyConstraints.add(
                 project.dependencies.constraints.create(
-                    "${SkikoArtifacts.DEFAULT_GROUP_ID}:${skikoArtifacts.jvmRuntimeArtifactId}:${skiko.deployVersion}!!"
+                    "${skikoArtifacts.groupId}:${skikoArtifacts.jvmRuntimeArtifactId}:${skiko.deployVersion}!!"
                 )
             )
             
@@ -405,7 +406,7 @@ private fun SkikoPublishingContext.configureAwtPublicationConstraints() {
             awtRuntimeTargets.forEach { (os, arch) ->
                 config.dependencyConstraints.add(
                     project.dependencies.constraints.create(
-                        "${SkikoArtifacts.DEFAULT_GROUP_ID}:${skikoArtifacts.jvmRuntimeArtifactIdFor(os, arch)}:${skiko.deployVersion}!!"
+                        "${skikoArtifacts.groupId}:${skikoArtifacts.jvmRuntimeArtifactIdFor(os, arch)}:${skiko.deployVersion}!!"
                     )
                 )
             }

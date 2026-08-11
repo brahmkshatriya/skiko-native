@@ -17,6 +17,8 @@ import supportNativeIosArm64
 import supportNativeIosSimulatorArm64
 import supportNativeIosX64
 import supportNativeLinux
+import supportNativeLinuxArm64
+import supportNativeLinuxX64
 import supportNativeMac
 import supportNativeTvosArm64
 import supportNativeTvosSimulatorArm64
@@ -186,13 +188,13 @@ fun Project.configureSignAndPublishDependencies() {
         tasks.configureEach {
             when {
                 name.startsWith(publishLinuxX64) -> {
-                    dependsOn(signLinuxArm64Publication)
+                    if (supportNativeLinuxArm64) dependsOn(signLinuxArm64Publication)
                     dependsOn(signLinuxX64Publication)
                 }
 
                 name.startsWith(publishLinuxArm64) -> {
                     dependsOn(signLinuxArm64Publication)
-                    dependsOn(signLinuxX64Publication)
+                    if (supportNativeLinuxX64) dependsOn(signLinuxX64Publication)
                 }
             }
         }

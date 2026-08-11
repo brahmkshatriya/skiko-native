@@ -54,3 +54,32 @@ so use command like
 ```
 to codesign the JNI library.
 Use `security find-identity -v -p codesigning` to find valid signing identities.
+
+## GitHub tag release for desktop Kotlin/Native
+
+The `Publish Skiko Native to Maven Central` workflow publishes these targets when a tag such as
+`0.152.0` or `v0.152.0` is pushed:
+
+* `linuxX64`
+* `linuxArm64`
+* `mingwX64`
+
+Configure these GitHub Actions repository secrets:
+
+* `GRADLE_PROPERTIES`: the complete contents of the release `~/.gradle/gradle.properties` file,
+  including `mavenCentralUsername`, `mavenCentralPassword`, `signing.keyId`, and
+  `signing.password`. The workflow replaces `signing.secretKeyRingFile` with its runner-local path.
+* `GPG_SECRET_KEY_RING_BASE64`: the base64-encoded contents of the file referenced by
+  `signing.secretKeyRingFile`.
+
+For example, create the second secret locally without printing the key into the terminal log:
+
+```bash
+base64 -w 0 ~/.gradle/secring.gpg > skiko-secret-key.base64
+```
+
+The Linux and Windows jobs create signed Maven repositories. A final job merges the repositories,
+checks the native-only `skiko` root plus all three target modules, and publishes one Maven Central
+deployment. The root Gradle module metadata points to `skiko-linuxx64`, `skiko-linuxarm64`, and
+`skiko-mingwx64`; its temporary AWT compiler target is removed from the published variants. The tag
+version overrides `deploy.version` from the Gradle properties file.

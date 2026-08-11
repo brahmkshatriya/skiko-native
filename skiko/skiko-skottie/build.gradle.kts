@@ -32,6 +32,7 @@ apply<SideWasmImportsGeneratorPlugin>()
 
 val skiko = SkikoProperties(rootProject)
 val skikoSkottieArtifacts = SkikoArtifacts(
+    groupId = skiko.deployGroup,
     artifactIdPrefix = "skiko-skottie",
     displayName = "Skiko Skottie",
     pomDescription = "Kotlin Skia Skottie bindings",

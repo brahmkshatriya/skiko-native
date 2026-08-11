@@ -135,6 +135,9 @@ class SkikoProperties(private val myProject: Project) {
 
     val planeDeployVersion: String = myProject.property("deploy.version") as String
 
+    val deployGroup: String = myProject.findProperty("deploy.group")?.toString()
+        ?: SkikoArtifacts.DEFAULT_GROUP_ID
+
     val deployVersion: String
         get() {
             val main = if (isRelease) planeDeployVersion else "$planeDeployVersion-SNAPSHOT"
@@ -284,10 +287,13 @@ object SkikoGradleProperties {
     const val NATIVE_TVOS_X64 = "skiko.native.tvos.x64.enabled"
     const val NATIVE_MAC = "skiko.native.mac.enabled"
     const val NATIVE_LINUX = "skiko.native.linux.enabled"
+    const val NATIVE_LINUX_X64 = "skiko.native.linux.x64.enabled"
+    const val NATIVE_LINUX_ARM64 = "skiko.native.linux.arm64.enabled"
     const val NATIVE_WINDOWS = "skiko.native.windows.enabled"
 }
 
 class SkikoArtifacts(
+    val groupId: String = DEFAULT_GROUP_ID,
     val artifactIdPrefix: String = DEFAULT_ARTIFACT_ID_PREFIX,
     val displayName: String = "Skiko",
     val pomDescription: String = "Kotlin Skia bindings",
@@ -311,8 +317,12 @@ class SkikoArtifacts(
     // does not seem possible (at least without adding a dash to a target's tasks),
     // so we're using the default naming pattern instead.
     // See https://youtrack.jetbrains.com/issue/KT-50001.
-    fun nativeArtifactIdFor(os: OS, arch: Arch, isUikitSim: Boolean = false) =
-        "$artifactIdPrefix-${os.id + if (isUikitSim) "simulator" else ""}${arch.id}"
+    fun nativeArtifactIdFor(os: OS, arch: Arch, isUikitSim: Boolean = false): String {
+        // Kotlin/Native calls its Windows target mingwX64, so KGP publishes
+        // `*-mingwx64` rather than using Skiko's internal `windows` OS id.
+        val targetOsId = if (os == OS.Windows) "mingw" else os.id
+        return "$artifactIdPrefix-${targetOsId + if (isUikitSim) "simulator" else ""}${arch.id}"
+    }
 
     companion object {
         const val DEFAULT_ARTIFACT_ID_PREFIX = "skiko"

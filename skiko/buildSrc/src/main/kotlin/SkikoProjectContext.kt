@@ -224,7 +224,21 @@ val Project.supportNativeMac: Boolean
     get() = supportAllNative || findProperty(SkikoGradleProperties.NATIVE_MAC) == "true" || isInIdea
 
 val Project.supportNativeLinux: Boolean
-    get() = supportAllNative || findProperty(SkikoGradleProperties.NATIVE_LINUX) == "true" || isInIdea
+    get() = supportNativeLinuxX64 || supportNativeLinuxArm64
+
+val Project.supportNativeLinuxX64: Boolean
+    get() =
+        supportAllNative ||
+            findProperty(SkikoGradleProperties.NATIVE_LINUX) == "true" ||
+            findProperty(SkikoGradleProperties.NATIVE_LINUX_X64) == "true" ||
+            isInIdea
+
+val Project.supportNativeLinuxArm64: Boolean
+    get() =
+        supportAllNative ||
+            findProperty(SkikoGradleProperties.NATIVE_LINUX) == "true" ||
+            findProperty(SkikoGradleProperties.NATIVE_LINUX_ARM64) == "true" ||
+            isInIdea
 
 val Project.supportNativeWindows: Boolean
     get() = supportAllNative || findProperty(SkikoGradleProperties.NATIVE_WINDOWS) == "true" || isInIdea
