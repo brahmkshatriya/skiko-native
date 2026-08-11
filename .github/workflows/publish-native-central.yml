@@ -120,7 +120,11 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:GPG_SECRET_KEY_RING_BASE64)) {
             throw 'GPG_SECRET_KEY_RING_BASE64 is empty'
           }
-          $gradleDir = Join-Path $HOME '.gradle'
+          if ([string]::IsNullOrWhiteSpace($env:GRADLE_USER_HOME)) {
+            $gradleDir = Join-Path $HOME '.gradle'
+          } else {
+            $gradleDir = $env:GRADLE_USER_HOME
+          }
           $propertiesFile = Join-Path $gradleDir 'gradle.properties'
           $keyring = Join-Path $gradleDir 'skiko-secret-key.gpg'
           New-Item -ItemType Directory -Force -Path $gradleDir | Out-Null
