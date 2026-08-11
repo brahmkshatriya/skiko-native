@@ -20,6 +20,7 @@ import supportNativeLinux
 import supportNativeLinuxArm64
 import supportNativeLinuxX64
 import supportNativeMac
+import supportNativeWindows
 import supportNativeTvosArm64
 import supportNativeTvosSimulatorArm64
 import supportNativeTvosX64
@@ -196,6 +197,14 @@ fun Project.configureSignAndPublishDependencies() {
                     dependsOn(signLinuxArm64Publication)
                     if (supportNativeLinuxX64) dependsOn(signLinuxX64Publication)
                 }
+            }
+        }
+    }
+
+    if (supportNativeWindows) {
+        tasks.configureEach {
+            if (name.startsWith("publishMingwX64PublicationTo")) {
+                dependsOn("signMingwX64Publication")
             }
         }
     }
