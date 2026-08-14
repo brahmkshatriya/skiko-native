@@ -3,7 +3,10 @@ package org.jetbrains.skia
 import org.jetbrains.skia.impl.*
 import org.jetbrains.skia.impl.Library.Companion.staticLoad
 
-class Image internal constructor(ptr: NativePointer) : RefCnt(ptr), IHasImageInfo {
+class Image internal constructor(
+    ptr: NativePointer,
+    private val sourceBitmap: Bitmap? = null,
+) : RefCnt(ptr), IHasImageInfo {
     companion object {
         /**
          *
@@ -107,12 +110,14 @@ class Image internal constructor(ptr: NativePointer) : RefCnt(ptr), IHasImageInf
          *
          * @see [https://fiddle.skia.org/c/@Image_MakeFromBitmap](https://fiddle.skia.org/c/@Image_MakeFromBitmap)
          */
-        fun makeFromBitmap(bitmap: Bitmap): Image {
+        fun makeFromBitmap(bitmap: Bitmap): Image = makeFromBitmap(bitmap, bitmap)
+
+        internal fun makeFromBitmap(bitmap: Bitmap, cacheOwner: Bitmap?): Image {
             return try {
                 Stats.onNativeCall()
                 val ptr = _nMakeFromBitmap(getPtr(bitmap))
                 if (ptr == NullPointer) throw RuntimeException("Failed to Image::makeFromBitmap $bitmap")
-                Image(ptr)
+                Image(ptr, cacheOwner)
             } finally {
                 reachabilityBarrier(bitmap)
             }
@@ -466,6 +471,14 @@ class Image internal constructor(ptr: NativePointer) : RefCnt(ptr), IHasImageInf
             reachabilityBarrier(this)
             reachabilityBarrier(dst)
         }
+    }
+
+    internal val hasMinificationCacheOwner: Boolean
+        get() = sourceBitmap != null
+
+    internal fun minifiedForDraw(targetWidth: Int, targetHeight: Int): Image? {
+        val bitmap = sourceBitmap?.minifiedBitmapForDraw(this, targetWidth, targetHeight) ?: return null
+        return makeFromBitmap(bitmap, cacheOwner = null)
     }
 
     fun scalePixels(dst: Pixmap, samplingMode: SamplingMode, cache: Boolean): Boolean {

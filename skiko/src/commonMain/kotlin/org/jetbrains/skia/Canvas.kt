@@ -580,15 +580,33 @@ open class Canvas internal constructor(ptr: NativePointer, managed: Boolean, int
         paint: Paint?,
         strict: Boolean
     ): Canvas {
+        val minified = minifiedImageForDraw(
+            image = image,
+            srcLeft = srcLeft,
+            srcTop = srcTop,
+            srcRight = srcRight,
+            srcBottom = srcBottom,
+            dstLeft = dstLeft,
+            dstTop = dstTop,
+            dstRight = dstRight,
+            dstBottom = dstBottom,
+            samplingMode = samplingMode,
+        )
+        val effectiveImage = minified ?: image
+        val effectiveSrcRight = if (minified != null) minified.width.toFloat() else srcRight
+        val effectiveSrcBottom = if (minified != null) minified.height.toFloat() else srcBottom
+        val effectiveSrcLeft = if (minified != null) 0f else srcLeft
+        val effectiveSrcTop = if (minified != null) 0f else srcTop
+
         Stats.onNativeCall()
         try {
             _nDrawImageRect(
                 _ptr,
-                getPtr(image),
-                srcLeft,
-                srcTop,
-                srcRight,
-                srcBottom,
+                getPtr(effectiveImage),
+                effectiveSrcLeft,
+                effectiveSrcTop,
+                effectiveSrcRight,
+                effectiveSrcBottom,
                 dstLeft,
                 dstTop,
                 dstRight,
@@ -599,6 +617,8 @@ open class Canvas internal constructor(ptr: NativePointer, managed: Boolean, int
                 strict
             )
         } finally {
+            reachabilityBarrier(effectiveImage)
+            if (minified != null && !minified.isClosed) minified.close()
             reachabilityBarrier(image)
             reachabilityBarrier(paint)
             reachabilityBarrier(this)
@@ -628,6 +648,52 @@ open class Canvas internal constructor(ptr: NativePointer, managed: Boolean, int
             paint = paint,
             strict = strict
         )
+    }
+
+    private fun minifiedImageForDraw(
+        image: Image,
+        srcLeft: Float,
+        srcTop: Float,
+        srcRight: Float,
+        srcBottom: Float,
+        dstLeft: Float,
+        dstTop: Float,
+        dstRight: Float,
+        dstBottom: Float,
+        samplingMode: SamplingMode,
+    ): Image? {
+        val filter = samplingMode as? FilterMipmap ?: return null
+        if (filter.filterMode != FilterMode.LINEAR || filter.mipmapMode != MipmapMode.NONE) return null
+        if (!image.hasMinificationCacheOwner) return null
+
+        if (srcLeft != 0f || srcTop != 0f ||
+            srcRight != image.width.toFloat() || srcBottom != image.height.toFloat()) {
+            return null
+        }
+
+        val srcWidth = srcRight - srcLeft
+        val srcHeight = srcBottom - srcTop
+        val dstWidth = dstRight - dstLeft
+        val dstHeight = dstBottom - dstTop
+        if (srcWidth == 0f || srcHeight == 0f || dstWidth == 0f || dstHeight == 0f) return null
+
+        val matrix = localToDeviceAsMatrix33.mat
+        if (matrix[6] != 0f || matrix[7] != 0f || matrix[8] == 0f) return null
+        val localScaleX = dstWidth / srcWidth
+        val localScaleY = dstHeight / srcHeight
+        val deviceScaleX = kotlin.math.sqrt(
+            matrix[0] * matrix[0] * localScaleX * localScaleX +
+                matrix[3] * matrix[3] * localScaleX * localScaleX
+        )
+        val deviceScaleY = kotlin.math.sqrt(
+            matrix[1] * matrix[1] * localScaleY * localScaleY +
+                matrix[4] * matrix[4] * localScaleY * localScaleY
+        )
+        if (deviceScaleX >= 1f && deviceScaleY >= 1f) return null
+
+        val targetWidth = kotlin.math.max(1, kotlin.math.round(kotlin.math.abs(srcWidth) * deviceScaleX).toInt())
+        val targetHeight = kotlin.math.max(1, kotlin.math.round(kotlin.math.abs(srcHeight) * deviceScaleY).toInt())
+        return image.minifiedForDraw(targetWidth, targetHeight)
     }
 
     fun drawImageNine(image: Image, center: IRect, dst: Rect, filterMode: FilterMode, paint: Paint?): Canvas {

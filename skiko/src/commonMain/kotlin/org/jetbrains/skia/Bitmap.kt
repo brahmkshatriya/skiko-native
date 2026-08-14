@@ -6,6 +6,8 @@ import kotlin.math.min
 
 class Bitmap internal constructor(ptr: NativePointer) : Managed(ptr, _FinalizerHolder.PTR), IHasImageInfo {
     companion object {
+        private const val MAX_MINIFIED_IMAGE_CACHE_ENTRIES = 4
+
         fun makeFromImage(image: Image): Bitmap {
             val bitmap = Bitmap()
             bitmap.allocPixels(image.imageInfo)
@@ -30,6 +32,89 @@ class Bitmap internal constructor(ptr: NativePointer) : Managed(ptr, _FinalizerH
     }
 
     internal var _imageInfo: ImageInfo? = null
+
+    private data class MinifiedBitmapEntry(
+        val generationId: Int,
+        val width: Int,
+        val height: Int,
+        val bitmap: Bitmap,
+    )
+
+    private var minifiedBitmapCache: List<MinifiedBitmapEntry> = emptyList()
+
+    internal fun minifiedBitmapForDraw(sourceImage: Image, targetWidth: Int, targetHeight: Int): Bitmap? {
+        if (targetWidth <= 0 || targetHeight <= 0 ||
+            (targetWidth >= width && targetHeight >= height)) {
+            return null
+        }
+
+        val currentGenerationId = generationId
+        var cachedBitmap: Bitmap? = null
+        commonSynchronized(this) {
+            val validEntries = minifiedBitmapCache.filter { it.generationId == currentGenerationId }
+            val index = validEntries.indexOfFirst {
+                it.width == targetWidth && it.height == targetHeight
+            }
+            if (index >= 0) {
+                val entry = validEntries[index]
+                minifiedBitmapCache = listOf(entry) + validEntries.filterIndexed { i, _ -> i != index }
+                cachedBitmap = entry.bitmap
+            } else if (validEntries.size != minifiedBitmapCache.size) {
+                minifiedBitmapCache = validEntries
+            }
+        }
+        cachedBitmap?.let { return it }
+
+        val target = Bitmap()
+        if (!target.allocN32Pixels(targetWidth, targetHeight)) {
+            target.close()
+            return null
+        }
+        val scaled = target.peekPixels()?.use { pixmap ->
+            sourceImage.scalePixels(
+                pixmap,
+                FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR),
+                false,
+            )
+        } ?: false
+        if (!scaled) {
+            target.close()
+            return null
+        }
+        target.setImmutable()
+
+        if (generationId != currentGenerationId) {
+            target.close()
+            return null
+        }
+
+        var result = target
+        commonSynchronized(this) {
+            val validEntries = minifiedBitmapCache.filter { it.generationId == currentGenerationId }
+            val existingIndex = validEntries.indexOfFirst {
+                it.width == targetWidth && it.height == targetHeight
+            }
+            if (existingIndex >= 0) {
+                val entry = validEntries[existingIndex]
+                minifiedBitmapCache = listOf(entry) +
+                    validEntries.filterIndexed { i, _ -> i != existingIndex }
+                result = entry.bitmap
+            } else {
+                minifiedBitmapCache = (
+                    listOf(MinifiedBitmapEntry(currentGenerationId, targetWidth, targetHeight, target)) +
+                        validEntries
+                    ).take(MAX_MINIFIED_IMAGE_CACHE_ENTRIES)
+            }
+        }
+
+        if (result !== target) target.close()
+        return result
+    }
+
+    override fun close() {
+        super.close()
+        minifiedBitmapCache = emptyList()
+    }
 
     /**
      * Creates an empty Bitmap without pixels, with [ColorType.UNKNOWN],

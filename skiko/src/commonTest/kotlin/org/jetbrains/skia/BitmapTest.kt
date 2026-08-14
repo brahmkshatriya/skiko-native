@@ -1,5 +1,6 @@
 package org.jetbrains.skia
 
+import org.jetbrains.skia.impl.use
 import org.jetbrains.skiko.KotlinBackend
 import org.jetbrains.skiko.kotlinBackend
 import org.jetbrains.skiko.tests.runTest
@@ -43,6 +44,31 @@ class BitmapTest {
         assertEquals(84, bitmap.computeByteSize())
 
         bitmap.generationId
+    }
+
+    @Test
+    fun minifiedBitmapCacheBelongsToBitmapGeneration() = runTest {
+        val bitmap = Bitmap()
+        assertTrue(bitmap.allocN32Pixels(64, 64))
+
+        val first = Image.makeFromBitmap(bitmap).use { image ->
+            assertNotNull(bitmap.minifiedBitmapForDraw(image, 16, 16))
+        }
+        val second = Image.makeFromBitmap(bitmap).use { image ->
+            assertNotNull(bitmap.minifiedBitmapForDraw(image, 16, 16))
+        }
+        assertSame(first, second)
+        assertTrue(first.isImmutable)
+
+        bitmap.notifyPixelsChanged()
+        val afterMutation = Image.makeFromBitmap(bitmap).use { image ->
+            assertNotNull(bitmap.minifiedBitmapForDraw(image, 16, 16))
+        }
+        assertNotSame(first, afterMutation)
+
+        bitmap.close()
+        first.close()
+        afterMutation.close()
     }
 
     @Test
