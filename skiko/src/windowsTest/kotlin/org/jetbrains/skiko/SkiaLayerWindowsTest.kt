@@ -23,6 +23,9 @@ import platform.windows.CreateWindowExW
 import platform.windows.CW_USEDEFAULT
 import platform.windows.DestroyWindow
 import platform.windows.GetModuleHandleW
+import platform.windows.SendMessageW
+import platform.windows.WM_ENTERSIZEMOVE
+import platform.windows.WM_EXITSIZEMOVE
 import platform.windows.WS_OVERLAPPEDWINDOW
 
 class SkiaLayerWindowsTest {
@@ -435,6 +438,76 @@ class SkiaLayerWindowsTest {
             ),
             SkikoProperties.fallbackRenderApiQueue(GraphicsApi.DIRECT3D),
         )
+    }
+
+    @Test
+    fun tracksInteractiveResizeAndRequestsOneFinalPaint() = withWindow { window ->
+        var paintRequests = 0
+        window.attachCallbacks(
+            paint = { paintRequests += 1 },
+            render = {},
+            onDestroyed = {},
+            onFailure = { throw it },
+        )
+        try {
+            assertFalse(window.isLiveResize)
+
+            SendMessageW(window.hwnd(), WM_ENTERSIZEMOVE.toUInt(), 0u, 0L)
+            assertTrue(window.isLiveResize)
+            assertEquals(0, paintRequests)
+
+            SendMessageW(window.hwnd(), WM_EXITSIZEMOVE.toUInt(), 0u, 0L)
+            assertFalse(window.isLiveResize)
+            assertEquals(1, paintRequests)
+        } finally {
+            window.detachCallbacks()
+        }
+    }
+
+    @Test
+    fun growsDirect3DRenderTargetCapacityInsteadOfResizingEveryFrame() {
+        val initial =
+            direct3DRenderTargetSize(
+                currentWidth = 0,
+                currentHeight = 0,
+                requestedWidth = 800,
+                requestedHeight = 600,
+            )
+        assertTrue(initial.width >= 800)
+        assertTrue(initial.height >= 600)
+
+        assertEquals(
+            initial,
+            direct3DRenderTargetSize(
+                currentWidth = initial.width,
+                currentHeight = initial.height,
+                requestedWidth = 1024,
+                requestedHeight = 768,
+            ),
+        )
+        val grown =
+            direct3DRenderTargetSize(
+                currentWidth = initial.width,
+                currentHeight = initial.height,
+                requestedWidth = 1600,
+                requestedHeight = 1200,
+            )
+        assertTrue(grown.width >= 1600)
+        assertTrue(grown.height >= 1200)
+    }
+
+    @Test
+    fun scalesDirect3DSwapChainCapacityBackToCurrentSourceSize() {
+        val scale =
+            direct3DCompositionScale(
+                sourceWidth = 866,
+                sourceHeight = 1374,
+                renderTargetWidth = 1440,
+                renderTargetHeight = 1664,
+            )
+
+        assertEquals(866f / 1440f, scale.x)
+        assertEquals(1374f / 1664f, scale.y)
     }
 }
 

@@ -217,8 +217,11 @@ HRESULT attachDirectComposition(WindowsDirect3DDevice *state,
   if (FAILED(result))
     return result;
   result = state->compositionDevice->Commit();
-  if (SUCCEEDED(result))
-    state->transparencySupported = true;
+  if (SUCCEEDED(result)) {
+    // DirectComposition is also used for opaque capacity-backed swap chains. Only advertise a
+    // transparent window buffer when the caller explicitly requested one.
+    state->transparencySupported = state->transparencyRequested;
+  }
   return result;
 }
 
@@ -263,19 +266,20 @@ HRESULT createSwapChain(WindowsDirect3DDevice *state, UINT width, UINT height) {
   IDXGISwapChain1 *swapChain1 = nullptr;
   HRESULT result = E_FAIL;
 
-  if (state->transparencyRequested) {
-    result = createSwapChainAttempt(state, width, height, true, preferredFlags,
-                                    &swapChain1);
+  // A composition visual preserves the source rectangle's 1:1 coordinate space while the
+  // capacity-backed swap chain remains larger. CreateSwapChainForHwnd instead stretches the full
+  // backing buffer to the client area, shrinking current-size content whenever spare capacity is
+  // present.
+  result = createSwapChainAttempt(state, width, height, true, preferredFlags,
+                                  &swapChain1);
+  if (FAILED(result)) {
+    result = createSwapChainAttempt(state, width, height, true, 0, &swapChain1);
+  }
+  if (SUCCEEDED(result)) {
+    result = attachDirectComposition(state, swapChain1);
     if (FAILED(result)) {
-      result =
-          createSwapChainAttempt(state, width, height, true, 0, &swapChain1);
-    }
-    if (SUCCEEDED(result)) {
-      result = attachDirectComposition(state, swapChain1);
-      if (FAILED(result)) {
-        releaseComposition(state);
-        releaseCom(swapChain1);
-      }
+      releaseComposition(state);
+      releaseCom(swapChain1);
     }
   }
 
@@ -461,6 +465,33 @@ extern "C" KInt skiko_windows_d3d_ensure_swap_chain(KNativePointer handle,
                                          static_cast<UINT>(height))
                        : S_OK;
   return static_cast<KInt>(result);
+}
+
+extern "C" KInt skiko_windows_d3d_set_source_size(KNativePointer handle,
+                                                   KInt width, KInt height,
+                                                   KFloat scaleX,
+                                                   KFloat scaleY) {
+  auto *state = reinterpret_cast<WindowsDirect3DDevice *>(handle);
+  if (state == nullptr || state->swapChain == nullptr || width <= 0 ||
+      height <= 0 || scaleX <= 0.0f || scaleX > 1.0f || scaleY <= 0.0f ||
+      scaleY > 1.0f)
+    return E_INVALIDARG;
+  HRESULT result = state->swapChain->SetSourceSize(static_cast<UINT>(width),
+                                                   static_cast<UINT>(height));
+  if (FAILED(result))
+    return static_cast<KInt>(remember(state, result));
+  // DXGI_SCALING_STRETCH maps the selected source region to the full
+  // capacity-backed swap chain. Scale each axis back to the current physical
+  // source size. Unlike a DirectComposition visual commit, this transform
+  // becomes active with the next Present, atomically with the replacement
+  // frame, so live resize cannot briefly display it at the wrong scale.
+  const DXGI_MATRIX_3X2_F transform = {scaleX, 0.0f, 0.0f,
+                                       scaleY, 0.0f, 0.0f};
+  result = state->swapChain->SetMatrixTransform(&transform);
+  if (FAILED(result))
+    return static_cast<KInt>(remember(state, result));
+  state->lastError = S_OK;
+  return S_OK;
 }
 
 extern "C" KNativePointer

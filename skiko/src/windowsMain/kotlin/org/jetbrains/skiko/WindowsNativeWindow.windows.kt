@@ -37,7 +37,6 @@ import platform.windows.GetClientRect
 import platform.windows.GetDC
 import platform.windows.GetDeviceCaps
 import platform.windows.GetLastError
-import platform.windows.GetTickCount64
 import platform.windows.GetModuleHandleW
 import platform.windows.GetWindowLongPtrW
 import platform.windows.GDI_ERROR
@@ -118,9 +117,8 @@ class WindowsNativeWindow private constructor(
     internal var destroyCallback: (() -> Unit)? = null
     internal var callbackFailureHandler: ((Throwable) -> Unit)? = null
     private val renderMessageQueued = AtomicBoolean(false)
-    private val liveResizeRenderThrottle =
-        LiveResizeRenderThrottle(LiveResizeFramesPerSecond)
-    private var liveResize = false
+    internal var isLiveResize = false
+        private set
     private var previousWindowProc: platform.windows.WNDPROC? = null
     private var dispatchInstalled = false
 
@@ -206,44 +204,29 @@ class WindowsNativeWindow private constructor(
         renderCallback = null
         destroyCallback = null
         renderMessageQueued.store(false)
-        liveResize = false
-        liveResizeRenderThrottle.reset()
+        isLiveResize = false
         if (!owned) uninstallExternalDispatch()
         callbackFailureHandler = null
     }
 
     internal fun dispatchRenderMessage() {
         renderMessageQueued.store(false)
-        try {
-            invokeCallback(renderCallback)
-        } finally {
-            if (liveResize) {
-                liveResizeRenderThrottle.onRenderCompleted(GetTickCount64().toLong())
-            }
-        }
+        invokeCallback(renderCallback)
     }
 
     internal fun dispatchPaintMessage() {
         invokeCallback(paintCallback)
     }
 
-    internal fun dispatchResizePaintMessage() {
-        if (
-            !liveResize ||
-                liveResizeRenderThrottle.shouldRequestRender(GetTickCount64().toLong())
-        ) {
-            dispatchPaintMessage()
-        }
-    }
-
     internal fun beginLiveResize() {
-        liveResize = true
-        liveResizeRenderThrottle.reset()
+        isLiveResize = true
     }
 
     internal fun endLiveResize() {
-        liveResize = false
-        liveResizeRenderThrottle.reset()
+        if (!isLiveResize) return
+        isLiveResize = false
+        // Request one frame at the final client size. The Direct3D renderer defers its expensive
+        // swap-chain resize until this point.
         dispatchPaintMessage()
     }
 
@@ -263,8 +246,7 @@ class WindowsNativeWindow private constructor(
         destroyCallback = null
         callbackFailureHandler = null
         renderMessageQueued.store(false)
-        liveResize = false
-        liveResizeRenderThrottle.reset()
+        isLiveResize = false
     }
 
     internal fun handleNativeFinalDestroy() {
@@ -479,12 +461,7 @@ private fun skikoWindowProc(hwnd: HWND?, message: UINT, wParam: WPARAM, lParam: 
                 window?.forwardMessage(hwnd, message, wParam, lParam)
                     ?: DefWindowProcW(hwnd, message, wParam, lParam)
             }
-            WM_SIZE.toUInt() -> {
-                window?.dispatchResizePaintMessage()
-                window?.forwardMessage(hwnd, message, wParam, lParam)
-                    ?: DefWindowProcW(hwnd, message, wParam, lParam)
-            }
-            WM_DISPLAYCHANGE.toUInt() -> {
+            WM_SIZE.toUInt(), WM_DISPLAYCHANGE.toUInt() -> {
                 window?.dispatchPaintMessage()
                 window?.forwardMessage(hwnd, message, wParam, lParam)
                     ?: DefWindowProcW(hwnd, message, wParam, lParam)
@@ -546,5 +523,3 @@ private fun skikoWindowProc(hwnd: HWND?, message: UINT, wParam: WPARAM, lParam: 
             ?: DefWindowProcW(hwnd, message, wParam, lParam)
     }
 }
-
-private const val LiveResizeFramesPerSecond = 60

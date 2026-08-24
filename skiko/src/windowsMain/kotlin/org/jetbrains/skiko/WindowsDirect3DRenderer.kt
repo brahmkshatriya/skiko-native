@@ -16,12 +16,71 @@ import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.ExternalSymbolName
 import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.PixelGeometry
+import org.jetbrains.skia.Rect
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
 import org.jetbrains.skia.SurfaceProps
 import org.jetbrains.skia.impl.NativePointer
 import kotlin.native.internal.NativePtr
+
+private const val Direct3DRenderTargetGrowthAlignment = 64L
+
+internal data class Direct3DRenderTargetSize(val width: Int, val height: Int)
+
+internal data class Direct3DCompositionScale(val x: Float, val y: Float)
+
+internal fun direct3DCompositionScale(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    renderTargetWidth: Int,
+    renderTargetHeight: Int,
+): Direct3DCompositionScale {
+    require(
+        sourceWidth > 0 &&
+            sourceHeight > 0 &&
+            renderTargetWidth >= sourceWidth &&
+            renderTargetHeight >= sourceHeight,
+    )
+    return Direct3DCompositionScale(
+        x = sourceWidth.toFloat() / renderTargetWidth.toFloat(),
+        y = sourceHeight.toFloat() / renderTargetHeight.toFloat(),
+    )
+}
+
+internal fun direct3DRenderTargetSize(
+    currentWidth: Int,
+    currentHeight: Int,
+    requestedWidth: Int,
+    requestedHeight: Int,
+): Direct3DRenderTargetSize {
+    require(requestedWidth > 0 && requestedHeight > 0)
+    return Direct3DRenderTargetSize(
+        width = expandedRenderTargetDimension(currentWidth, requestedWidth),
+        height = expandedRenderTargetDimension(currentHeight, requestedHeight),
+    )
+}
+
+private fun expandedRenderTargetDimension(current: Int, requested: Int): Int {
+    if (current >= requested) return current
+    val currentLong = current.toLong()
+    val requestedLong = requested.toLong()
+    val expanded =
+        if (current <= 0) {
+            requestedLong + maxOf(requestedLong / 2L, Direct3DRenderTargetGrowthAlignment)
+        } else {
+            maxOf(
+                requestedLong,
+                currentLong + maxOf(currentLong / 2L, Direct3DRenderTargetGrowthAlignment),
+            )
+        }
+    return (
+            (expanded + Direct3DRenderTargetGrowthAlignment - 1L) /
+                Direct3DRenderTargetGrowthAlignment * Direct3DRenderTargetGrowthAlignment
+        )
+        .coerceAtMost(Int.MAX_VALUE.toLong())
+        .toInt()
+}
 
 /** D3D12/Ganesh renderer for a native Win32-backed [SkiaLayer]. */
 internal class WindowsDirect3DRenderer(
@@ -40,6 +99,8 @@ internal class WindowsDirect3DRenderer(
     private val surfaces = arrayOfNulls<Surface>(effectiveFrameBufferCount)
     private var width = 0
     private var height = 0
+    private var sourceWidth = 0
+    private var sourceHeight = 0
     private var lastRenderedBufferIndex = -1
     private var closed = false
     private var contextFailed = false
@@ -112,11 +173,33 @@ internal class WindowsDirect3DRenderer(
         block: (Canvas) -> Unit,
     ) {
         checkRendererOpen()
-        val bufferIndex = acquireSurface(width, height)
+        val targetSize =
+            direct3DRenderTargetSize(
+                currentWidth = this.width,
+                currentHeight = this.height,
+                requestedWidth = width,
+                requestedHeight = height,
+            )
+        val bufferIndex = acquireSurface(targetSize.width, targetSize.height)
         val surface = checkNotNull(surfaces[bufferIndex])
-        surface.canvas.clear(Color.TRANSPARENT)
-        block(surface.canvas)
+        val canvas = surface.canvas
+        // Clear the full capacity so newly exposed spare pixels never contain an older layout.
+        canvas.clear(Color.TRANSPARENT)
+        val saveCount = canvas.save()
+        try {
+            // The swap-chain buffers retain spare capacity so ordinary window resizes only change
+            // the visible source rectangle. Keep Compose and Skia in the same pixel coordinate
+            // space and clip work outside the current client area.
+            canvas.clipRect(Rect.makeWH(width.toFloat(), height.toFloat()))
+            block(canvas)
+        } finally {
+            canvas.restoreToCount(saveCount)
+        }
         surface.flushAndSubmit()
+        // SetSourceSize takes effect immediately, independently of Present. Update it only after
+        // the replacement frame is ready so DWM never stretches the previously presented layout
+        // while Compose is still drawing the new size.
+        setSourceSize(width, height)
 
         val result =
             windowsDirect3DPresent(
@@ -134,14 +217,23 @@ internal class WindowsDirect3DRenderer(
         checkRendererOpen()
         val bufferIndex =
             if (
-                width == this.width &&
-                height == this.height &&
+                width == sourceWidth &&
+                height == sourceHeight &&
                 lastRenderedBufferIndex in surfaces.indices &&
                 surfaces[lastRenderedBufferIndex] != null
             ) {
                 lastRenderedBufferIndex
             } else {
-                acquireSurface(width, height)
+                val targetSize =
+                    direct3DRenderTargetSize(
+                        currentWidth = this.width,
+                        currentHeight = this.height,
+                        requestedWidth = width,
+                        requestedHeight = height,
+                    )
+                acquireSurface(targetSize.width, targetSize.height).also {
+                    setSourceSize(width, height)
+                }
             }
         val bitmap = Bitmap()
         check(bitmap.allocPixels(ImageInfo.makeN32(width, height, ColorAlphaType.PREMUL))) {
@@ -198,6 +290,29 @@ internal class WindowsDirect3DRenderer(
         return bufferIndex
     }
 
+    private fun setSourceSize(newWidth: Int, newHeight: Int) {
+        if (sourceWidth == newWidth && sourceHeight == newHeight) {
+            return
+        }
+        val scale = direct3DCompositionScale(newWidth, newHeight, width, height)
+        val result =
+            windowsDirect3DSetSourceSize(
+                handle = nativeDevice,
+                width = newWidth,
+                height = newHeight,
+                scaleX = scale.x,
+                scaleY = scale.y,
+            )
+        if (result < 0) {
+            contextFailed = windowsDirect3DIsDeviceLost(nativeDevice)
+            throw RenderException(
+                "Could not update the Direct3D swap-chain source size (${formatHResult(result)})",
+            )
+        }
+        sourceWidth = newWidth
+        sourceHeight = newHeight
+    }
+
     private fun ensureSwapChain(newWidth: Int, newHeight: Int) {
         val isResize = width != 0 && (width != newWidth || height != newHeight)
         if (!isResize && width == newWidth && height == newHeight) return
@@ -221,6 +336,8 @@ internal class WindowsDirect3DRenderer(
         }
         width = newWidth
         height = newHeight
+        sourceWidth = 0
+        sourceHeight = 0
         lastRenderedBufferIndex = -1
     }
 
@@ -332,6 +449,15 @@ private external fun windowsDirect3DEnsureSwapChain(
     width: Int,
     height: Int,
     resize: Boolean,
+): Int
+
+@ExternalSymbolName("skiko_windows_d3d_set_source_size")
+private external fun windowsDirect3DSetSourceSize(
+    handle: NativePointer,
+    width: Int,
+    height: Int,
+    scaleX: Float,
+    scaleY: Float,
 ): Int
 
 @ExternalSymbolName("skiko_windows_d3d_acquire_buffer")
