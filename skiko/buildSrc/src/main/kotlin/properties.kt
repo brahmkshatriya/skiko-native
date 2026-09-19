@@ -133,14 +133,14 @@ class SkikoProperties(private val myProject: Project) {
     val isTeamcityCIBuild: Boolean
         get() = myProject.hasProperty("teamcity")
 
-    val planeDeployVersion: String = myProject.property("deploy.version") as String
+    val baseDeployVersion: String = myProject.property("deploy.version") as String
 
     val deployGroup: String = myProject.findProperty("deploy.group")?.toString()
         ?: SkikoArtifacts.DEFAULT_GROUP_ID
 
     val deployVersion: String
         get() {
-            val main = if (isRelease) planeDeployVersion else "$planeDeployVersion-SNAPSHOT"
+            val main = if (isRelease) baseDeployVersion else "$baseDeployVersion-SNAPSHOT"
             var metadata = if (buildType == SkiaBuildType.DEBUG) "+debug" else ""
             metadata += if (isWasmBuildWithProfiling) "+profiling" else ""
             return main + metadata
@@ -273,7 +273,6 @@ object SkikoGradleProperties {
     const val KOTLIN_LANGUAGE_VERSION = "skiko.kotlin.language.version"
     const val KOTLIN_API_VERSION = "skiko.kotlin.api.version"
     const val AWT_ENABLED = "skiko.awt.enabled"
-    const val GRAPHITE_JVM_ENABLED = "skiko.graphite.jvm.enabled"
     const val WASM_ENABLED = "skiko.wasm.enabled"
     const val ANDROID_ENABLED = "skiko.android.enabled"
     const val NATIVE_ENABLED = "skiko.native.enabled"
@@ -302,6 +301,7 @@ class SkikoArtifacts(
     val commonArtifactId = artifactIdPrefix
     val jvmArtifactId = "$artifactIdPrefix-awt"
     val jvmRuntimeArtifactId = "$artifactIdPrefix-awt-runtime"
+    val jvmRuntimeAllArtifactId = "$jvmRuntimeArtifactId-all"
     // an artifact (klib) for k/js targets
     val jsArtifactId = "$artifactIdPrefix-js"
     // an artifact (klib) for k/wasm targets
