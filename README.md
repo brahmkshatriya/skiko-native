@@ -4,15 +4,16 @@ Skiko exposes the [Skia](https://skia.org) graphics API to Kotlin Multiplatform.
 offscreen drawing, GPU rendering, text and paragraph layout, images, paths, effects, and native
 window rendering through `SkiaLayer`.
 
-This fork adds complete Kotlin/Native desktop targets for Linux and Windows. Native applications
-do not require a JVM at runtime.
+This fork adds Kotlin/Native desktop support for Linux, Windows, and macOS. Native applications
+do not require a JVM at runtime. The current fork release is `0.153.0` under the
+`dev.brahmkshatriya.skiko` Maven group.
 
 ## Supported targets
 
 | Kotlin target | Architectures | Status |
 | --- | --- | --- |
 | JVM Linux | x64, arm64 | Available |
-| JVM Windows | x64 | Available |
+| JVM Windows | x64, arm64 | Available |
 | JVM macOS | x64, arm64 | Available |
 | Android | x64, arm64; API 24+ | Available |
 | JavaScript and WebAssembly | Browser | Available |
@@ -22,8 +23,9 @@ do not require a JVM at runtime.
 | Kotlin/Native iOS | Device and simulator | Available |
 | Kotlin/Native Windows arm64 | — | Not currently available |
 
-The Linux and Windows native artifacts are development snapshots. Pin the repository revision and
-artifact version used by your application.
+Release tags are configured to build every desktop-native publication first, merge and verify the
+complete Maven repository, and then upload the root module and all platform modules together in one
+Maven Central deployment.
 
 ## Features
 
@@ -39,7 +41,7 @@ Skiko provides Kotlin APIs for:
 * Native resource loading
 * Skottie through the separate `skiko-skottie` artifacts
 
-### Native desktop rendering
+### Linux and Windows native rendering
 
 | Feature | Linux Native | Windows Native |
 | --- | --- | --- |
@@ -72,6 +74,19 @@ but final presentation scheduling remains driver/compositor controlled.
 
 ANGLE can be detected and loaded on Windows, but it is not currently a Kotlin/Native renderer
 backend.
+
+### macOS native rendering
+
+The regular AppKit-backed macOS `SkiaLayer` continues to support Metal. This fork also adds an
+OpenGL/Ganesh path for native window hosts such as SDL, which is useful in environments where Metal
+is unavailable or unsuitable.
+
+A native host implements the internal `MacosSkiaLayerComponent` contract to provide the window
+handle, drawable size, content scale, fullscreen state, OpenGL context operations, buffer swaps, and
+render scheduling. When attached through that host, set `SkiaLayer.renderApi` to
+`GraphicsApi.OPENGL`. The OpenGL path supports VSync through the host swap interval, transparent
+framebuffer clears, framebuffer snapshots, external OpenGL work, and drawing borrowed OpenGL
+textures into a Skia canvas.
 
 ## Requirements
 
@@ -181,10 +196,34 @@ wraps Skia's process-exit `atexit` registration, avoiding the incompatible mixed
 path. Consumers should not add replacement `msvcrt` compatibility archives or duplicate MSVC CRT
 linker flags manually.
 
+## Build Kotlin/Native for macOS
+
+Build either macOS KLIB on a macOS host:
+
+```shell
+./gradlew -p skiko macosArm64MainKlibrary \
+    -Pskiko.awt.enabled=false \
+    -Pskiko.native.mac.enabled=true
+
+./gradlew -p skiko macosX64MainKlibrary \
+    -Pskiko.awt.enabled=false \
+    -Pskiko.native.mac.enabled=true
+```
+
+Publish the native artifacts to Maven Local with:
+
+```shell
+./gradlew -p skiko \
+    publishKotlinMultiplatformPublicationToMavenLocal \
+    publishMacosArm64PublicationToMavenLocal \
+    publishMacosX64PublicationToMavenLocal \
+    -Pskiko.awt.enabled=false \
+    -Pskiko.native.mac.enabled=true
+```
+
 ## Use in a Kotlin Multiplatform project
 
-The native development version in this fork is `0.0.1-linux-native-SNAPSHOT`. Publish the required
-target to Maven Local first, then configure the consumer:
+For the `0.153.0` fork release, use the `dev.brahmkshatriya.skiko` coordinates:
 
 ```kotlin
 plugins {
@@ -192,22 +231,26 @@ plugins {
 }
 
 repositories {
-    mavenLocal()
     mavenCentral()
 }
 
 kotlin {
     linuxX64()
+    linuxArm64()
     mingwX64()
+    macosX64()
+    macosArm64()
 
     sourceSets.commonMain.dependencies {
-        implementation("org.jetbrains.skiko:skiko:0.0.1-linux-native-SNAPSHOT")
+        implementation("dev.brahmkshatriya.skiko:skiko:0.153.0")
     }
 }
 ```
 
-Kotlin Multiplatform selects the corresponding `skiko-linuxx64` or `skiko-mingwx64` KLIB from the
-root `skiko` publication.
+Kotlin Multiplatform selects the corresponding `skiko-linuxx64`, `skiko-linuxarm64`,
+`skiko-mingwx64`, `skiko-macosx64`, or `skiko-macosarm64` KLIB from the root `skiko` publication.
+Kotlin/Native Windows ARM64 is not currently available because the Kotlin/Native toolchain exposes
+only the `mingwX64` Windows target.
 
 ### Minimal drawing example
 
@@ -229,7 +272,7 @@ fun drawFrame() = Surface.makeRasterN32Premul(640, 360).use { surface ->
 ```
 
 Use `SkiaLayer` when rendering into a native window. Skiko supplies the rendering layer; a complete
-widget toolkit and ready-made Linux/Windows window host are available in
+widget toolkit and ready-made Linux, Windows, and macOS window hosts are available in
 [Compose Native](https://github.com/brahmkshatriya/compose-native).
 
 ## JVM dependency
@@ -254,7 +297,7 @@ Windows applications using text shaping must place the matching `icudtl.dat` bes
 The `skiko-mingwx64` publication provides it through the `icudtl` classifier:
 
 ```text
-org.jetbrains.skiko:skiko-mingwx64:0.0.1-linux-native-SNAPSHOT:icudtl@dat
+dev.brahmkshatriya.skiko:skiko-mingwx64:0.153.0:icudtl@dat
 ```
 
 Application packagers must also include any DLLs directly imported by their final executable or
@@ -322,8 +365,8 @@ Enable interactive UI tests with `-Dskiko.test.ui.enabled=true`.
 
 ## Current limitations
 
-* Native desktop artifacts are development snapshots and are not published to Maven Central.
-* Kotlin/Native Windows is currently x64 only.
+* Kotlin/Native Windows is currently x64 only because Kotlin/Native does not expose a Windows ARM64 target.
+* The macOS SDL/native-host integration currently uses the OpenGL renderer; the standard AppKit path remains Metal-capable.
 * ANGLE is not yet a Kotlin/Native Windows renderer backend.
 * DirectComposition transparency requires a compatible real Windows compositor.
 * Final VSync and buffering behavior can vary by driver and compositor.
