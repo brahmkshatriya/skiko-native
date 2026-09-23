@@ -13,22 +13,31 @@ import platform.darwin.NSObject
 
 /**
  * SkiaLayer implementation for macOS.
- * Supports only [GraphicsApi.METAL]
+ * Supports [GraphicsApi.METAL] and [GraphicsApi.OPENGL].
  */
 @OptIn(BetaInteropApi::class)
 actual open class SkiaLayer {
+    private var macosComponent: MacosSkiaLayerComponent? = null
+    private var macosRenderer: MacosOpenGLRenderer? = null
+    private var macosRenderPending = false
+
     fun isShowing(): Boolean {
         return true
     }
 
     /**
-     * [GraphicsApi.METAL] is the only GraphicsApi supported for macOS.
-     * Setter throws an IllegalArgumentException if the value is not [GraphicsApi.METAL].
+     * Graphics API used by the native macOS renderer.
+     *
+     * Metal remains the default, while OpenGL is available for systems where Metal is unavailable
+     * (for example, virtualized macOS environments).
      */
     actual var renderApi: GraphicsApi = GraphicsApi.METAL
         set(value) {
-            if (value != GraphicsApi.METAL) {
+            if (value != GraphicsApi.METAL && value != GraphicsApi.OPENGL) {
                 throw IllegalArgumentException("$field is not supported in macOS")
+            }
+            if (macosComponent != null && value != GraphicsApi.OPENGL) {
+                throw IllegalArgumentException("The SDL macOS host supports only OPENGL")
             }
             field = value
         }
@@ -38,15 +47,26 @@ actual open class SkiaLayer {
      * https://developer.apple.com/documentation/appkit/nswindow/1419459-backingscalefactor
      */
     actual val contentScale: Float
-        get() = if (this::nsView.isInitialized) (nsView.window?.backingScaleFactor?.toFloat() ?: 1.0f) else 1.0f
+        get() =
+            macosComponent?.contentScale
+                ?: if (this::nsView.isInitialized) {
+                    nsView.window?.backingScaleFactor?.toFloat() ?: 1.0f
+                } else {
+                    1.0f
+                }
 
     /**
      * Fullscreen is not supported
      */
     actual var fullscreen: Boolean
-        get() = false
+        get() = macosComponent?.fullscreen ?: false
         set(value) {
-            if (value) throw IllegalArgumentException("fullscreen unsupported")
+            val component = macosComponent
+            if (component != null) {
+                component.fullscreen = value
+            } else if (value) {
+                throw IllegalArgumentException("fullscreen unsupported")
+            }
         }
 
     /**
@@ -56,12 +76,16 @@ actual open class SkiaLayer {
         private set
 
     actual val component: Any?
-        get() = this.nsView
+        get() = macosComponent?.windowHandle ?: if (this::nsView.isInitialized) nsView else null
 
     /**
      * Implements rendering logic and events processing.
      */
     actual var renderDelegate: SkikoRenderDelegate? = null
+        set(value) {
+            field = value
+            if (value != null && macosComponent != null) needRender(throttledToVsync = false)
+        }
 
     internal var redrawer: Redrawer? = null
 
@@ -111,6 +135,21 @@ actual open class SkiaLayer {
      * @param container - should be an instance of [NSView]
      */
     actual fun attachTo(container: Any) {
+        if (container is MacosSkiaLayerComponent) {
+            check(macosComponent == null && redrawer == null) { "SkiaLayer is already attached" }
+            require(renderApi == GraphicsApi.OPENGL) {
+                "The SDL macOS host requires GraphicsApi.OPENGL"
+            }
+            macosComponent = container
+            try {
+                macosRenderer = MacosOpenGLRenderer(container)
+            } catch (failure: Throwable) {
+                macosComponent = null
+                throw failure
+            }
+            if (renderDelegate != null) needRender(throttledToVsync = false)
+            return
+        }
         check(!this::nsView.isInitialized) { "Already attached to another NSView" }
         check(container is NSView) { "container should be an instance of NSView" }
         nsView = container
@@ -123,6 +162,11 @@ actual open class SkiaLayer {
     }
 
     actual fun detach() {
+        macosRenderer?.close()
+        macosRenderer = null
+        macosComponent = null
+        macosRenderPending = false
+        if (redrawer == null) return
         nsViewObserver.removeObserver()
         redrawer?.dispose()
         redrawer = null
@@ -132,7 +176,72 @@ actual open class SkiaLayer {
      * Schedules a frame to an appropriate moment.
      */
     actual fun needRender(throttledToVsync: Boolean) {
-        redrawer?.needRender(throttledToVsync)
+        val component = macosComponent
+        if (component != null) {
+            if (renderDelegate == null) return
+            macosRenderPending = true
+            component.requestRender()
+        } else {
+            redrawer?.needRender(throttledToVsync)
+        }
+    }
+
+    @InternalSkikoApi
+    fun render(force: Boolean = false): Boolean {
+        val component = macosComponent
+        if (component == null) {
+            needRender(throttledToVsync = !force)
+            return true
+        }
+        if (!force && !macosRenderPending) return false
+        val renderer = macosRenderer ?: return false
+        val delegate = renderDelegate ?: return false
+        val width = component.drawableWidth.coerceAtLeast(0)
+        val height = component.drawableHeight.coerceAtLeast(0)
+        if (width <= 0 || height <= 0) return false
+
+        macosRenderPending = false
+        renderer.render(width, height, waitForVsync = !force) { canvas ->
+            delegate.onRender(canvas, width, height, currentNanoTime())
+        }
+        return true
+    }
+
+    @InternalSkikoApi
+    val rendererDescription: String
+        get() = macosRenderer?.description ?: "Skiko ${renderApi.name}"
+
+    @InternalSkikoApi
+    fun snapshot(width: Int, height: Int): Bitmap {
+        val renderer = macosRenderer
+        if (renderer != null) return renderer.snapshot(width, height)
+
+        val safeWidth = width.coerceAtLeast(1)
+        val safeHeight = height.coerceAtLeast(1)
+        val bitmap = Bitmap()
+        check(bitmap.allocN32Pixels(safeWidth, safeHeight)) {
+            "Could not allocate macOS capture bitmap"
+        }
+        bitmap.erase(0)
+        val canvas = Canvas(bitmap)
+        try {
+            renderDelegate?.onRender(canvas, safeWidth, safeHeight, 0L)
+        } finally {
+            canvas.close()
+        }
+        bitmap.notifyPixelsChanged()
+        return bitmap
+    }
+
+    @InternalSkikoApi
+    fun <T> withOpenGlContext(block: () -> T): T =
+        checkNotNull(macosRenderer) { "The macOS SDL OpenGL renderer is not attached" }
+            .withExternalOpenGl(block)
+
+    @InternalSkikoApi
+    fun drawOpenGlTexture(textureId: Int, width: Int, height: Int, canvas: Canvas) {
+        checkNotNull(macosRenderer) { "The macOS SDL OpenGL renderer is not attached" }
+            .drawTexture(textureId, width, height, canvas)
     }
 
     @Deprecated(

@@ -27,7 +27,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "Tag must be a Maven version such as 0.152.0 or v0.152.0" >&2
+            echo "Tag must be a Maven version such as 0.153.0 or v0.153.0" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -74,12 +74,13 @@ jobs:
               -Pskiko.native.linux.x64.enabled=true \
               -Pskiko.native.linux.arm64.enabled=true \
               -Pskiko.native.windows.enabled=true \
+              -Pskiko.native.mac.enabled=true \
               :publishKotlinMultiplatformPublicationToBuildRepoRepository \
               :publishLinuxX64PublicationToBuildRepoRepository \
               :publishLinuxArm64PublicationToBuildRepoRepository
 
       - uses: actions/upload-artifact@v4
-        name: Upload Linux Maven repository
+        name: Stage Linux Maven repository
         with:
           name: skiko-native-repo-linux-${{ needs.prepare.outputs.version }}
           path: skiko/build/repo
@@ -149,20 +150,17 @@ jobs:
             :publishMingwX64PublicationToBuildRepoRepository
 
       - uses: actions/upload-artifact@v4
-        name: Upload Windows Maven repository
+        name: Stage Windows Maven repository
         with:
           name: skiko-native-repo-windows-${{ needs.prepare.outputs.version }}
           path: skiko/build/repo
           if-no-files-found: error
           retention-days: 5
 
-  publish:
-    name: Publish merged repository
-    needs:
-      - prepare
-      - linux
-      - windows
-    runs-on: ubuntu-24.04
+  macos:
+    name: Build macOS x64 and arm64
+    needs: prepare
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         name: Check out tag
@@ -175,13 +173,6 @@ jobs:
 
       - uses: ./.github/actions/setup-prerequisites
         name: Set up prerequisites
-
-      - uses: actions/download-artifact@v4
-        name: Merge platform Maven repositories
-        with:
-          pattern: skiko-native-repo-*-${{ needs.prepare.outputs.version }}
-          path: skiko/build/repo
-          merge-multiple: true
 
       - name: Restore Gradle properties and signing key
         shell: bash
@@ -201,14 +192,52 @@ jobs:
           printf '\nsigning.secretKeyRingFile=%s\n' "$keyring" >> "$gradle_dir/gradle.properties"
           chmod 600 "$gradle_dir/gradle.properties" "$keyring"
 
-      - name: Verify collected publications
+      - name: Build signed macOS publications
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew -p skiko --no-daemon --stacktrace --no-configuration-cache \
+            -Pdeploy.release=true \
+            -Pdeploy.version=${{ needs.prepare.outputs.version }} \
+            -Pskiko.awt.enabled=true \
+            -Pskiko.native.mac.enabled=true \
+            :publishMacosX64PublicationToBuildRepoRepository \
+            :publishMacosArm64PublicationToBuildRepoRepository
+
+      - uses: actions/upload-artifact@v4
+        name: Stage macOS Maven repository
+        with:
+          name: skiko-native-repo-macos-${{ needs.prepare.outputs.version }}
+          path: skiko/build/repo
+          if-no-files-found: error
+          retention-days: 5
+
+  assemble:
+    name: Assemble complete Maven repository
+    needs:
+      - prepare
+      - linux
+      - windows
+      - macos
+    runs-on: ubuntu-24.04
+    steps:
+      # Platform jobs must hand their files to another runner, so these are
+      # internal CI staging artifacts only. Maven Central is not contacted yet.
+      - uses: actions/download-artifact@v4
+        name: Merge platform Maven repositories
+        with:
+          pattern: skiko-native-repo-*-${{ needs.prepare.outputs.version }}
+          path: skiko/build/repo
+          merge-multiple: true
+
+      - name: Verify complete repository
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           group_path='dev/brahmkshatriya/skiko'
-          for module in skiko skiko-linuxx64 skiko-linuxarm64 skiko-mingwx64; do
+          for module in skiko skiko-linuxx64 skiko-linuxarm64 skiko-mingwx64 skiko-macosx64 skiko-macosarm64; do
             module_dir="skiko/build/repo/$group_path/$module/$RELEASE_VERSION"
             test -d "$module_dir"
             test -s "$module_dir/$module-$RELEASE_VERSION.pom"
@@ -224,18 +253,71 @@ jobs:
             fi
           done
           root_module="skiko/build/repo/$group_path/skiko/$RELEASE_VERSION/skiko-$RELEASE_VERSION.module"
-          expected_targets=$'linux_arm64\nlinux_x64\nmingw_x64'
+          expected_targets=$'linux_arm64\nlinux_x64\nmacos_arm64\nmacos_x64\nmingw_x64'
           actual_targets="$(jq -r '.variants[].attributes["org.jetbrains.kotlin.native.target"] // empty' "$root_module" | sort -u)"
           test "$actual_targets" = "$expected_targets"
           test "$(jq '[.variants[] | select(.name | startswith("awt"))] | length' "$root_module")" -eq 0
-          for module in skiko-linuxx64 skiko-linuxarm64 skiko-mingwx64; do
+          for module in skiko-linuxx64 skiko-linuxarm64 skiko-mingwx64 skiko-macosx64 skiko-macosarm64; do
             test "$(jq --arg module "$module" '[.variants[] | select(."available-at".module == $module)] | length' "$root_module")" -gt 0
           done
           windows_dir="skiko/build/repo/$group_path/skiko-mingwx64/$RELEASE_VERSION"
           test -s "$windows_dir/skiko-mingwx64-$RELEASE_VERSION-icudtl.dat"
           test -s "$windows_dir/skiko-mingwx64-$RELEASE_VERSION-icudtl.dat.asc"
 
-      - name: Upload and publish on Maven Central
+      - uses: actions/upload-artifact@v4
+        name: Upload complete Maven repository
+        with:
+          name: skiko-native-complete-repo-${{ needs.prepare.outputs.version }}
+          path: skiko/build/repo
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    name: Upload all publications together
+    needs:
+      - prepare
+      - assemble
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        name: Check out tag
+
+      - uses: actions/setup-java@v4
+        name: Set up JDK 21
+        with:
+          java-version: '21'
+          distribution: corretto
+
+      - uses: ./.github/actions/setup-prerequisites
+        name: Set up prerequisites
+
+      - uses: actions/download-artifact@v4
+        name: Download complete Maven repository
+        with:
+          name: skiko-native-complete-repo-${{ needs.prepare.outputs.version }}
+          path: skiko/build/repo
+
+      - name: Restore Gradle properties and signing key
+        shell: bash
+        env:
+          GRADLE_PROPERTIES_CONTENT: ${{ secrets.GRADLE_PROPERTIES }}
+          GPG_SECRET_KEY_RING_BASE64: ${{ secrets.GPG_SECRET_KEY_RING_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$GRADLE_PROPERTIES_CONTENT"
+          test -n "$GPG_SECRET_KEY_RING_BASE64"
+          gradle_dir="$HOME/.gradle"
+          keyring="$gradle_dir/skiko-secret-key.gpg"
+          mkdir -p "$gradle_dir"
+          printf '%s' "$GRADLE_PROPERTIES_CONTENT" > "$gradle_dir/gradle.properties"
+          printf '%s' "$GPG_SECRET_KEY_RING_BASE64" | tr -d '\r\n ' | base64 --decode > "$keyring"
+          test -s "$keyring"
+          printf '\nsigning.secretKeyRingFile=%s\n' "$keyring" >> "$gradle_dir/gradle.properties"
+          chmod 600 "$gradle_dir/gradle.properties" "$keyring"
+
+      # UploadToSonatypeTask creates one Maven Central deployment containing
+      # the root module and every desktop-native target module.
+      - name: Upload all publications in one Maven Central deployment
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}

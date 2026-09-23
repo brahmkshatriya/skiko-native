@@ -41,8 +41,6 @@ import platform.QuartzCore.*
 
 /**
  * OpenGL [Redrawer] implementation for the native (Kotlin/Native) macOS target.
- *
- * Not actually used. See [SkiaLayer.renderApi]
  */
 internal class MacOsOpenGLRedrawer(
     private val skiaLayer: SkiaLayer

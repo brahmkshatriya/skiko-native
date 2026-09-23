@@ -236,9 +236,9 @@ val uploadLinuxArm64NativeSkikoArtifactToMavenCentral by tasks.registering(Uploa
 }
 
 /**
- * Uploads the native-only KMP root and repository assembled from the Linux and Windows release jobs.
+ * Uploads the native-only KMP root and repository assembled from all desktop release jobs.
  * This task intentionally has no publication-task dependencies because no single host builds all
- * three native artifacts.
+ * desktop native artifacts.
  */
 val uploadDesktopNativeSkikoArtifactsToMavenCentral by tasks.registering(UploadToSonatypeTask::class) {
     deployName.set("Skiko Desktop Native ${skiko.deployVersion}")
@@ -249,6 +249,8 @@ val uploadDesktopNativeSkikoArtifactsToMavenCentral by tasks.registering(UploadT
                 skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.X64),
                 skikoArtifacts.nativeArtifactIdFor(OS.Linux, Arch.Arm64),
                 skikoArtifacts.nativeArtifactIdFor(OS.Windows, Arch.X64),
+                skikoArtifacts.nativeArtifactIdFor(OS.MacOS, Arch.X64),
+                skikoArtifacts.nativeArtifactIdFor(OS.MacOS, Arch.Arm64),
             ).map { artifactId ->
                 ModuleToUpload(
                     groupId = skiko.deployGroup,

@@ -149,6 +149,8 @@ val coreDependencies: SkikoDependencyScope.() -> Unit = {
                 staticSkiaLibs("piex", "dng_sdk")
                 frameworks(
                     "Metal",
+                    "OpenGL",
+                    "QuartzCore",
                     "CoreGraphics",
                     "CoreText",
                     "CoreServices",
@@ -527,7 +529,14 @@ skikoProjectContext.declarePublications()
 // compiled with the metadata/JVM compiler. Do not advertise that unpublished forked AWT
 // target: non-native consumers continue to use the upstream Skiko coordinates.
 if (providers.gradleProperty("skiko.native.root.only").map(String::toBoolean).getOrElse(false)) {
-    val publishedNativeTargets = setOf("linux_x64", "linux_arm64", "mingw_x64")
+    val publishedNativeTargets =
+        setOf(
+            "linux_x64",
+            "linux_arm64",
+            "mingw_x64",
+            "macos_x64",
+            "macos_arm64",
+        )
     tasks.named<GenerateModuleMetadata>("generateMetadataFileForKotlinMultiplatformPublication") {
         doLast {
             val metadataFile = outputFile.get().asFile
