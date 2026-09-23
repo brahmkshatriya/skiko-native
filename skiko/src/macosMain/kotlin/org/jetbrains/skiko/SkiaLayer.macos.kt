@@ -18,8 +18,9 @@ import platform.darwin.NSObject
 @OptIn(BetaInteropApi::class)
 actual open class SkiaLayer {
     private var macosComponent: MacosSkiaLayerComponent? = null
-    private var macosRenderer: MacosOpenGLRenderer? = null
+    private var macosRenderer: MacosNativeRenderer? = null
     private var macosRenderPending = false
+    private var macosRenderWaitsForVsync = true
 
     fun isShowing(): Boolean {
         return true
@@ -36,8 +37,8 @@ actual open class SkiaLayer {
             if (value != GraphicsApi.METAL && value != GraphicsApi.OPENGL) {
                 throw IllegalArgumentException("$field is not supported in macOS")
             }
-            if (macosComponent != null && value != GraphicsApi.OPENGL) {
-                throw IllegalArgumentException("The SDL macOS host supports only OPENGL")
+            if (macosComponent != null && value != field) {
+                throw IllegalStateException("The macOS native renderer cannot be changed after attach")
             }
             field = value
         }
@@ -137,12 +138,14 @@ actual open class SkiaLayer {
     actual fun attachTo(container: Any) {
         if (container is MacosSkiaLayerComponent) {
             check(macosComponent == null && redrawer == null) { "SkiaLayer is already attached" }
-            require(renderApi == GraphicsApi.OPENGL) {
-                "The SDL macOS host requires GraphicsApi.OPENGL"
-            }
             macosComponent = container
             try {
-                macosRenderer = MacosOpenGLRenderer(container)
+                macosRenderer =
+                    when (renderApi) {
+                        GraphicsApi.OPENGL -> MacosOpenGLRenderer(container)
+                        GraphicsApi.METAL -> MacosMetalRenderer(container)
+                        else -> error("Unsupported macOS native renderer: $renderApi")
+                    }
             } catch (failure: Throwable) {
                 macosComponent = null
                 throw failure
@@ -166,6 +169,7 @@ actual open class SkiaLayer {
         macosRenderer = null
         macosComponent = null
         macosRenderPending = false
+        macosRenderWaitsForVsync = true
         if (redrawer == null) return
         nsViewObserver.removeObserver()
         redrawer?.dispose()
@@ -179,6 +183,9 @@ actual open class SkiaLayer {
         val component = macosComponent
         if (component != null) {
             if (renderDelegate == null) return
+            macosRenderWaitsForVsync =
+                if (macosRenderPending) macosRenderWaitsForVsync && throttledToVsync
+                else throttledToVsync
             macosRenderPending = true
             component.requestRender()
         } else {
@@ -200,11 +207,18 @@ actual open class SkiaLayer {
         val height = component.drawableHeight.coerceAtLeast(0)
         if (width <= 0 || height <= 0) return false
 
+        val waitForVsync = if (macosRenderPending) macosRenderWaitsForVsync else true
         macosRenderPending = false
-        renderer.render(width, height, waitForVsync = !force) { canvas ->
+        macosRenderWaitsForVsync = true
+        val rendered = renderer.render(width, height, waitForVsync) { canvas ->
             delegate.onRender(canvas, width, height, currentNanoTime())
         }
-        return true
+        if (!rendered) {
+            macosRenderPending = true
+            macosRenderWaitsForVsync = waitForVsync
+            component.requestRender()
+        }
+        return rendered
     }
 
     @InternalSkikoApi
@@ -214,7 +228,7 @@ actual open class SkiaLayer {
     @InternalSkikoApi
     fun snapshot(width: Int, height: Int): Bitmap {
         val renderer = macosRenderer
-        if (renderer != null) return renderer.snapshot(width, height)
+        if (renderer is MacosOpenGLRenderer) return renderer.snapshot(width, height)
 
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
@@ -235,13 +249,15 @@ actual open class SkiaLayer {
 
     @InternalSkikoApi
     fun <T> withOpenGlContext(block: () -> T): T =
-        checkNotNull(macosRenderer) { "The macOS SDL OpenGL renderer is not attached" }
-            .withExternalOpenGl(block)
+        checkNotNull(macosRenderer as? MacosOpenGLRenderer) {
+            "The macOS native renderer is not OpenGL"
+        }.withExternalOpenGl(block)
 
     @InternalSkikoApi
     fun drawOpenGlTexture(textureId: Int, width: Int, height: Int, canvas: Canvas) {
-        checkNotNull(macosRenderer) { "The macOS SDL OpenGL renderer is not attached" }
-            .drawTexture(textureId, width, height, canvas)
+        checkNotNull(macosRenderer as? MacosOpenGLRenderer) {
+            "The macOS native renderer is not OpenGL"
+        }.drawTexture(textureId, width, height, canvas)
     }
 
     @Deprecated(

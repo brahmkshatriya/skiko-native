@@ -5,7 +5,7 @@ offscreen drawing, GPU rendering, text and paragraph layout, images, paths, effe
 window rendering through `SkiaLayer`.
 
 This fork adds Kotlin/Native desktop support for Linux, Windows, and macOS. Native applications
-do not require a JVM at runtime. The current fork release is `0.153.0` under the
+do not require a JVM at runtime. The current fork release is `0.153.1` under the
 `dev.brahmkshatriya.skiko` Maven group.
 
 ## Supported targets
@@ -77,16 +77,16 @@ backend.
 
 ### macOS native rendering
 
-The regular AppKit-backed macOS `SkiaLayer` continues to support Metal. This fork also adds an
-OpenGL/Ganesh path for native window hosts such as SDL, which is useful in environments where Metal
-is unavailable or unsuitable.
+The regular AppKit-backed macOS `SkiaLayer` supports Metal. Native window hosts such as SDL can now
+use either Metal/Ganesh or OpenGL/Ganesh. Metal remains the default; OpenGL is useful in environments
+where Metal is unavailable or when the application needs OpenGL-native interop.
 
-A native host implements the internal `MacosSkiaLayerComponent` contract to provide the window
-handle, drawable size, content scale, fullscreen state, OpenGL context operations, buffer swaps, and
-render scheduling. When attached through that host, set `SkiaLayer.renderApi` to
-`GraphicsApi.OPENGL`. The OpenGL path supports VSync through the host swap interval, transparent
-framebuffer clears, framebuffer snapshots, external OpenGL work, and drawing borrowed OpenGL
-textures into a Skia canvas.
+A native host implements the internal `MacosSkiaLayerComponent` contract to provide drawable size,
+content scale, fullscreen state, render scheduling, OpenGL context operations, and a host-owned
+`CAMetalLayer` when Metal is selected. Set `SkiaLayer.renderApi` before attaching the host.
+The Metal path renders directly into the supplied layer's drawables. The OpenGL path supports VSync
+through the host swap interval, transparent framebuffer clears, framebuffer snapshots, external
+OpenGL work, and drawing borrowed OpenGL textures into a Skia canvas.
 
 ## Requirements
 
@@ -223,7 +223,7 @@ Publish the native artifacts to Maven Local with:
 
 ## Use in a Kotlin Multiplatform project
 
-For the `0.153.0` fork release, use the `dev.brahmkshatriya.skiko` coordinates:
+For the `0.153.1` fork release, use the `dev.brahmkshatriya.skiko` coordinates:
 
 ```kotlin
 plugins {
@@ -242,7 +242,7 @@ kotlin {
     macosArm64()
 
     sourceSets.commonMain.dependencies {
-        implementation("dev.brahmkshatriya.skiko:skiko:0.153.0")
+        implementation("dev.brahmkshatriya.skiko:skiko:0.153.1")
     }
 }
 ```
@@ -297,7 +297,7 @@ Windows applications using text shaping must place the matching `icudtl.dat` bes
 The `skiko-mingwx64` publication provides it through the `icudtl` classifier:
 
 ```text
-dev.brahmkshatriya.skiko:skiko-mingwx64:0.153.0:icudtl@dat
+dev.brahmkshatriya.skiko:skiko-mingwx64:0.153.1:icudtl@dat
 ```
 
 Application packagers must also include any DLLs directly imported by their final executable or
@@ -366,7 +366,7 @@ Enable interactive UI tests with `-Dskiko.test.ui.enabled=true`.
 ## Current limitations
 
 * Kotlin/Native Windows is currently x64 only because Kotlin/Native does not expose a Windows ARM64 target.
-* The macOS SDL/native-host integration currently uses the OpenGL renderer; the standard AppKit path remains Metal-capable.
+* External OpenGL interop on macOS requires the OpenGL native-host renderer; it is not available while the window uses Metal.
 * ANGLE is not yet a Kotlin/Native Windows renderer backend.
 * DirectComposition transparency requires a compatible real Windows compositor.
 * Final VSync and buffering behavior can vary by driver and compositor.

@@ -23,7 +23,7 @@ import org.jetbrains.skia.impl.Native.Companion.NullPointer
 
 internal class MacosOpenGLRenderer(
     private val component: MacosSkiaLayerComponent,
-) {
+) : MacosNativeRenderer {
     private val openGlContext =
         component.createOpenGlContext().also {
             if (it == NullPointer) throw RenderException("Could not create an OpenGL context")
@@ -37,7 +37,7 @@ internal class MacosOpenGLRenderer(
     private var closed = false
 
     val deviceName: String?
-    val description: String
+    override val description: String
 
     init {
         try {
@@ -54,12 +54,12 @@ internal class MacosOpenGLRenderer(
         }
     }
 
-    fun render(
+    override fun render(
         width: Int,
         height: Int,
         waitForVsync: Boolean,
         block: (Canvas) -> Unit,
-    ) {
+    ): Boolean {
         makeCurrent()
         component.setOpenGlSwapInterval(if (waitForVsync) 1 else 0)
         ensureSurface(width, height)
@@ -68,6 +68,7 @@ internal class MacosOpenGLRenderer(
         block(skiaSurface.canvas)
         skiaSurface.flushAndSubmit()
         component.swapOpenGlBuffers()
+        return true
     }
 
     fun <T> withExternalOpenGl(block: () -> T): T {
@@ -125,7 +126,7 @@ internal class MacosOpenGLRenderer(
         return bitmap
     }
 
-    fun close() {
+    override fun close() {
         if (closed) return
         makeCurrent()
         closed = true

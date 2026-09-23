@@ -4,6 +4,7 @@ package org.jetbrains.skiko
 
 import org.jetbrains.skia.PixelGeometry
 import org.jetbrains.skia.impl.NativePointer
+import platform.QuartzCore.CAMetalLayer
 
 @InternalSkikoApi
 interface MacosSkiaLayerComponent {
@@ -21,5 +22,11 @@ interface MacosSkiaLayerComponent {
     fun swapOpenGlBuffers()
     fun deleteOpenGlContext(context: NativePointer)
     fun openGlRendererName(): String? = null
+
+    fun createMetalLayer(): CAMetalLayer =
+        error("The macOS native host does not provide a Metal layer")
+
+    fun deleteMetalLayer() = Unit
+
     fun requestRender()
 }
